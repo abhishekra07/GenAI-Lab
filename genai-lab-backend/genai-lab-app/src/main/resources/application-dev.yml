@@ -17,7 +17,7 @@ spring:
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:genailab}
     username: ${DB_USERNAME:genailab}
-    password: ${DB_PASSWORD:genailab}
+    password: ${DB_PASSWORD:genailab_dev_password}
 
   # ============================================================
   # JPA — more verbose in dev for debugging
@@ -26,7 +26,7 @@ spring:
     hibernate:
       # "none" during initial development — we have no JPA entities yet.
       # Change to "validate" once all entities are written (Step 4 onward).
-      ddl-auto: none
+      ddl-auto: validate
     properties:
       hibernate:
         show_sql: true

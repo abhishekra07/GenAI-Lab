@@ -46,3 +46,5 @@ logs/
 # Docker — don't ignore docker-compose.yml but ignore overrides
 # ----------------------------------------------------------
 docker-compose.override.yml
+application-dev-local.yml
+**/application-dev-local.yml

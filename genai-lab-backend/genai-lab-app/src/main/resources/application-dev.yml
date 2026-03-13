@@ -1,0 +1,77 @@
+# ============================================================
+# GenAI Lab — Development Profile
+# ============================================================
+# This file is loaded when SPRING_PROFILES_ACTIVE=dev
+# It overrides values from application.yml for local development.
+#
+# IMPORTANT: Never commit real API keys or passwords here.
+# This file is committed to Git — keep it safe.
+# Real secrets go in application-dev-local.yml (gitignored).
+# ============================================================
+
+spring:
+
+  # ============================================================
+  # DATABASE — points to local Docker container
+  # ============================================================
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:genailab}
+    username: ${DB_USERNAME:genailab}
+    password: ${DB_PASSWORD:genailab}
+
+  # ============================================================
+  # JPA — more verbose in dev for debugging
+  # ============================================================
+  jpa:
+    hibernate:
+      # "none" during initial development — we have no JPA entities yet.
+      # Change to "validate" once all entities are written (Step 4 onward).
+      ddl-auto: none
+    properties:
+      hibernate:
+        show_sql: true
+        format_sql: true
+
+  # ============================================================
+  # SPRING AI
+  # ============================================================
+  ai:
+    openai:
+      # Override with your actual key in application-dev-local.yml
+      # (that file is gitignored — safe to put real keys there)
+      api-key: ${OPENAI_API_KEY}
+
+# ============================================================
+# STORAGE — MinIO running in Docker
+# ============================================================
+genailab:
+  storage:
+    provider: ${STORAGE_PROVIDER:local}
+    local:
+      base-path: ${LOCAL_STORAGE_PATH:./uploads}
+    minio:
+      endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+      access-key: ${MINIO_ACCESS_KEY:minioadmin}
+      secret-key: ${MINIO_SECRET_KEY:minioadmin}
+      bucket-name: ${MINIO_BUCKET:genailab-documents}
+      secure: false
+
+  # ============================================================
+  # JWT — dev secret (safe to commit, not used in production)
+  # ============================================================
+  security:
+    jwt:
+      secret: dev-secret-key-only-for-local-development-not-for-production
+      expiration-ms: 86400000
+      refresh-expiration-ms: 604800000
+
+# ============================================================
+# LOGGING — more verbose in dev
+# ============================================================
+logging:
+  level:
+    root: INFO
+    com.genailab: DEBUG
+    org.springframework.security: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.flywaydb: DEBUG

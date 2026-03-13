@@ -1,0 +1,28 @@
+# Prometheus config for LOCAL DEVELOPMENT
+# The app runs on your laptop, not in Docker.
+# host.docker.internal resolves to your laptop's IP from inside a Docker container.
+# This is how we scrape a locally-running Spring Boot app from Prometheus-in-Docker.
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    environment: 'local-dev'
+    project: 'genailab'
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'genailab-app'
+    scrape_interval: 15s
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      # host.docker.internal = your laptop's IP, visible from inside Docker
+      # Works on Docker Desktop (Mac/Windows). On Linux, may need --add-host flag.
+      - targets: ['host.docker.internal:8080']
+        labels:
+          service: 'genailab-backend'
+          instance: 'local-dev'

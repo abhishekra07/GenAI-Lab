@@ -1,0 +1,23 @@
+# USE THIS during active development when you want to:
+#   - Run postgres, minio, prometheus in Docker
+#   - Run the Spring Boot app from your IDE
+#
+# HOW TO USE:
+#   docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# ==========================================================
+
+services:
+  app:
+    profiles:
+      - disabled
+  prometheus:
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./docker/prometheus/prometheus.dev.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+
+volumes:
+  prometheus_data:
+    name: genailab_prometheus_data

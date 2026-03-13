@@ -1,0 +1,84 @@
+# ==========================================================
+# Prometheus Configuration
+# ==========================================================
+#
+# Prometheus works by PULLING (scraping) metrics from targets
+# at a configured interval. This is opposite to push-based
+# monitoring where applications send metrics to a collector.
+#
+# The pull model has advantages:
+#   - Prometheus controls the scrape rate (no client-side throttling needed)
+#   - Easy to detect when a target is down (scrape fails)
+#   - Targets don't need to know where Prometheus is
+#
+# ==========================================================
+
+global:
+  # How often Prometheus scrapes all targets by default.
+  # 15s is a good balance between freshness and storage overhead.
+  # Individual jobs can override this with their own scrape_interval.
+  scrape_interval: 15s
+
+  # How long Prometheus waits for a scrape response before timing out.
+  # Must be less than scrape_interval.
+  scrape_timeout: 10s
+
+  # How often Prometheus evaluates alerting rules (we'll add these later).
+  evaluation_interval: 15s
+
+  # Labels added to ALL metrics collected by this Prometheus instance.
+  # Useful when you have multiple Prometheus instances and need to
+  # identify which one collected a particular metric.
+  external_labels:
+    environment: 'development'
+    project: 'genailab'
+
+# ==========================================================
+# SCRAPE CONFIGURATIONS
+# ==========================================================
+# Each "job" tells Prometheus what to scrape.
+# Job name appears as the "job" label on all metrics from that target.
+#
+scrape_configs:
+
+  # ----------------------------------------------------------
+  # Prometheus itself — monitor the monitor
+  # ----------------------------------------------------------
+  # Prometheus exposes its own metrics at /metrics.
+  # Scraping itself lets you track scrape durations, sample counts,
+  # and whether Prometheus is healthy.
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    # No path needed — Prometheus uses /metrics by default
+
+  # ----------------------------------------------------------
+  # GenAI Lab Spring Boot Application
+  # ----------------------------------------------------------
+  # Spring Boot Actuator with Micrometer exposes metrics at
+  # /actuator/prometheus in Prometheus text format.
+  #
+  # "app:8080" resolves to our Spring Boot container via
+  # Docker's internal DNS (container name = hostname on the network).
+  - job_name: 'genailab-app'
+    # Override global scrape interval for the app — 15s is fine
+    scrape_interval: 15s
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['app:8080']
+        # Labels added to all metrics from this target
+        labels:
+          service: 'genailab-backend'
+          instance: 'app-1'
+
+  # ----------------------------------------------------------
+  # PostgreSQL (via postgres_exporter — future addition)
+  # ----------------------------------------------------------
+  # To monitor PostgreSQL internals (query performance, connections,
+  # replication lag etc.), you'd add postgres_exporter as another
+  # Docker service and scrape it here.
+  # We leave this as a comment for future implementation.
+  #
+  # - job_name: 'postgresql'
+  #   static_configs:
+  #     - targets: ['postgres-exporter:9187']

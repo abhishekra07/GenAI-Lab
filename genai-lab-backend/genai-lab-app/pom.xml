@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.genailab</groupId>
+        <artifactId>genai-lab-backend</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>genai-lab-app</artifactId>
+    <packaging>jar</packaging>
+    <description>Application entry point — Spring Boot main class, application configuration, and module wiring</description>
+
+    <!--
+        THIS MODULE'S ROLE
+        ==================
+        genai-lab-app is the ONLY module that:
+        1. Contains the main() method (SpringApplication.run)
+        2. Produces the executable fat JAR
+        3. Contains application.yml with full configuration
+        4. Depends on ALL other modules (it wires everything together)
+
+        It contains almost zero business logic.
+        Think of it as the "assembly" layer — it just pulls all modules together
+        and hands control to Spring Boot's auto-configuration.
+    -->
+
+    <dependencies>
+
+        <dependency>
+            <groupId>com.genailab</groupId>
+            <artifactId>genai-lab-api</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.genailab</groupId>
+            <artifactId>genai-lab-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.genailab</groupId>
+            <artifactId>genai-lab-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.genailab</groupId>
+            <artifactId>genai-lab-ai</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.genailab</groupId>
+            <artifactId>genai-lab-storage</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.genailab</groupId>
+            <artifactId>genai-lab-chat</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.genailab</groupId>
+            <artifactId>genai-lab-document</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.genailab</groupId>
+            <artifactId>genai-lab-rag</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.genailab</groupId>
+            <artifactId>genai-lab-metrics</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Integration tests — test the full application context -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

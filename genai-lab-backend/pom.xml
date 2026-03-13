@@ -1,0 +1,239 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.3.4</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.genailab</groupId>
+    <artifactId>genai-lab-backend</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <name>GenAI Lab Backend</name>
+    <description>GenAI Lab — Developer workspace for Generative AI experimentation</description>
+
+    <!--
+        MODULES
+        =======
+        This tells Maven which child modules exist and in what ORDER to build them.
+        Maven resolves the build order based on inter-module dependencies,
+        but listing them here tells Maven where to find them on disk.
+    -->
+    <modules>
+        <module>genai-lab-common</module>
+        <module>genai-lab-security</module>
+        <module>genai-lab-ai</module>
+        <module>genai-lab-storage</module>
+        <module>genai-lab-chat</module>
+        <module>genai-lab-document</module>
+        <module>genai-lab-rag</module>
+        <module>genai-lab-metrics</module>
+        <module>genai-lab-api</module>
+        <module>genai-lab-app</module>
+    </modules>
+
+    <properties>
+        <!-- Java version — 21 is the current LTS with virtual threads -->
+        <java.version>21</java.version>
+
+        <!-- Encoding — always set this explicitly to avoid platform-specific build issues -->
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+        <!-- Spring AI — separate from Spring Boot, needs its own BOM -->
+        <spring-ai.version>1.0.0</spring-ai.version>
+
+        <!-- Security — JWT library -->
+        <jjwt.version>0.12.5</jjwt.version>
+
+        <!-- Database -->
+        <pgvector.version>0.1.4</pgvector.version>
+
+        <!-- Storage -->
+        <minio.version>8.5.11</minio.version>
+
+        <!-- Document parsing -->
+        <apache-pdfbox.version>3.0.3</apache-pdfbox.version>
+        <apache-poi.version>5.3.0</apache-poi.version>
+
+        <!-- Utilities -->
+        <mapstruct.version>1.5.5.Final</mapstruct.version>
+        <lombok.version>1.18.34</lombok.version>
+
+        <!-- Testing -->
+        <testcontainers.version>1.20.1</testcontainers.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- ==================== INTERNAL MODULES ==================== -->
+            <!--
+                We declare our own modules here so child modules can reference
+                each other without specifying versions.
+                All internal modules share the same version as the parent.
+            -->
+            <dependency>
+                <groupId>com.genailab</groupId>
+                <artifactId>genai-lab-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.genailab</groupId>
+                <artifactId>genai-lab-security</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.genailab</groupId>
+                <artifactId>genai-lab-ai</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.genailab</groupId>
+                <artifactId>genai-lab-storage</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.genailab</groupId>
+                <artifactId>genai-lab-chat</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.genailab</groupId>
+                <artifactId>genai-lab-document</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.genailab</groupId>
+                <artifactId>genai-lab-rag</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.genailab</groupId>
+                <artifactId>genai-lab-metrics</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.genailab</groupId>
+                <artifactId>genai-lab-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-api</artifactId>
+                <version>${jjwt.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-impl</artifactId>
+                <version>${jjwt.version}</version>
+                <scope>runtime</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-jackson</artifactId>
+                <version>${jjwt.version}</version>
+                <scope>runtime</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>com.pgvector</groupId>
+                <artifactId>pgvector</artifactId>
+                <version>${pgvector.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.minio</groupId>
+                <artifactId>minio</artifactId>
+                <version>${minio.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.pdfbox</groupId>
+                <artifactId>pdfbox</artifactId>
+                <version>${apache-pdfbox.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.poi</groupId>
+                <artifactId>poi-ooxml</artifactId>
+                <version>${apache-poi.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.mapstruct</groupId>
+                <artifactId>mapstruct</artifactId>
+                <version>${mapstruct.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>${testcontainers.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <configuration>
+                        <source>${java.version}</source>
+                        <target>${java.version}</target>
+                        <annotationProcessorPaths>
+                            <!-- Lombok MUST come before MapStruct -->
+                            <path>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                                <version>${lombok.version}</version>
+                            </path>
+                            <path>
+                                <groupId>org.mapstruct</groupId>
+                                <artifactId>mapstruct-processor</artifactId>
+                                <version>${mapstruct.version}</version>
+                            </path>
+                        </annotationProcessorPaths>
+                        <compilerArgs>
+                            <!-- Enable MapStruct verbose output during build for debugging -->
+                            <arg>-Amapstruct.verbose=true</arg>
+                        </compilerArgs>
+                    </configuration>
+                </plugin>
+
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <configuration>
+                        <useModulePath>false</useModulePath>
+                    </configuration>
+                </plugin>
+
+            </plugins>
+        </pluginManagement>
+    </build>
+
+</project>

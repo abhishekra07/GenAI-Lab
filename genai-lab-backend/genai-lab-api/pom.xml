@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.genailab</groupId>
+        <artifactId>genai-lab-backend</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>genai-lab-api</artifactId>
+    <packaging>jar</packaging>
+    <description>HTTP API layer — REST controllers, DTOs, request/response mapping, validation, global exception handling</description>
+
+    <!--
+        NOTE ON THIS MODULE'S ROLE
+        ==========================
+        The api module is intentionally "wide" — it depends on all domain modules.
+        This is correct. The API layer is the adapter between HTTP and your domain.
+
+        Controllers in this module:
+        - Receive HTTP requests
+        - Validate input
+        - Call the appropriate domain service
+        - Map domain objects to response DTOs
+        - Return HTTP responses
+
+        Controllers do NOT contain business logic.
+        They are thin translators between HTTP and domain services.
+    -->
+
+    <dependencies>
+
+        <!-- All domain modules — api layer needs to call all of them -->
+        <dependency>
+            <groupId>com.genailab</groupId>
+            <artifactId>genai-lab-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.genailab</groupId>
+            <artifactId>genai-lab-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.genailab</groupId>
+            <artifactId>genai-lab-chat</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.genailab</groupId>
+            <artifactId>genai-lab-document</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.genailab</groupId>
+            <artifactId>genai-lab-rag</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.genailab</groupId>
+            <artifactId>genai-lab-metrics</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.mapstruct</groupId>
+            <artifactId>mapstruct</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+</project>

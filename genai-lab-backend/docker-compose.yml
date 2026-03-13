@@ -1,0 +1,311 @@
+# ============================================================
+# GenAI Lab — Docker Compose Infrastructure
+# ============================================================
+#
+# HOW TO USE:
+#   Start all services:       docker-compose up -d
+#   Stop all services:        docker-compose down
+#   Stop + delete volumes:    docker-compose down -v   ⚠️ DESTROYS ALL DATA
+#   View logs:                docker-compose logs -f [service]
+#   Restart one service:      docker-compose restart postgres
+#   Rebuild app image:        docker-compose build app
+#
+# FIRST TIME SETUP:
+#   1. Copy .env.example to .env and fill in values
+#   2. Run: docker-compose up -d
+#   3. Wait ~30 seconds for all services to be healthy
+#   4. Check status: docker-compose ps
+#
+# ============================================================
+
+services:
+
+  # ==========================================================
+  # POSTGRESQL — Primary Database + pgvector extension
+  # ==========================================================
+  postgres:
+    # We use ankane/pgvector instead of the official postgres image.
+    # WHY? The official postgres image does NOT include the pgvector extension.
+    # ankane/pgvector is the official pgvector project's image, built on top
+    # of the official PostgreSQL image with pgvector pre-installed.
+    # Version 0.7.0 supports vector(1536) and cosine similarity we need.
+    image: pgvector/pgvector:pg16
+
+    container_name: genailab-postgres
+
+    # restart policy: restart the container if it crashes or if Docker daemon restarts.
+    # "unless-stopped" means: restart unless WE explicitly stopped it with docker stop.
+    restart: unless-stopped
+
+    environment:
+      # These create the initial database, user, and password on first startup.
+      # On subsequent startups, the existing data volume is used and these are ignored.
+      POSTGRES_DB: ${DB_NAME:-genailab}
+      POSTGRES_USER: ${DB_USERNAME:-genailab}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-genailab}
+      # Performance tuning: allocate 256MB shared buffers (PostgreSQL default is tiny)
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=en_US.UTF-8 --lc-ctype=en_US.UTF-8"
+
+    ports:
+      # Host port:Container port
+      # Expose port 5432 on localhost so you can connect from your IDE or pgAdmin.
+      # In production you would NOT expose this port — only the app container needs it.
+      - "${DB_PORT:-5432}:5432"
+
+    volumes:
+      # Named volume — survives container restarts and recreation.
+      # All PostgreSQL data files live here. Delete this volume to reset the database.
+      - postgres_data:/var/lib/postgresql/data
+
+      # Init scripts: any .sql files placed in this directory are executed
+      # ONCE on first startup (when the data volume is empty).
+      # We use this to enable the pgvector extension.
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+
+    healthcheck:
+      # pg_isready checks if PostgreSQL is accepting connections.
+      # -U and -d match the environment variables above.
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-genailab} -d ${DB_NAME:-genailab}"]
+      # Wait 10 seconds before running the first health check.
+      # PostgreSQL takes a few seconds to initialize on first startup.
+      interval: 10s
+      timeout: 5s
+      # After 5 consecutive failures, mark container as unhealthy.
+      retries: 5
+      start_period: 30s
+
+    networks:
+      - genailab-network
+
+  # ==========================================================
+  # MINIO — S3-Compatible Object Storage
+  # ==========================================================
+  minio:
+    # MinIO's official image. We use a specific version for reproducibility.
+    # "latest" is convenient but can break builds when MinIO releases breaking changes.
+    image: minio/minio:RELEASE.2024-09-13T20-26-02Z
+
+    container_name: genailab-minio
+
+    restart: unless-stopped
+
+    environment:
+      # MinIO's root credentials — equivalent to AWS root access key.
+      # Used by our MinioStorageService to authenticate.
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+
+    ports:
+      # 9000 — MinIO API (S3-compatible endpoint our app connects to)
+      - "${MINIO_API_PORT:-9000}:9000"
+      # 9001 — MinIO Console (web UI for browsing buckets and files)
+      # Access at: http://localhost:9001
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+
+    volumes:
+      # All uploaded files are stored in this named volume.
+      - minio_data:/data
+
+    # MinIO needs two commands:
+    # "server" starts the object storage server
+    # "--console-address" tells it which port to run the web console on
+    command: server /data --console-address ":9001"
+
+    healthcheck:
+      # MinIO exposes a /minio/health/live endpoint for health checks.
+      # curl returns exit code 0 if the request succeeds, non-zero otherwise.
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 10s
+
+    networks:
+      - genailab-network
+
+  # ==========================================================
+  # MINIO INIT — One-time bucket creation
+  # ==========================================================
+  minio-init:
+    # MinIO Client (mc) image — command-line tool for interacting with MinIO.
+    # This container runs ONCE to create our bucket, then exits.
+    image: minio/mc:latest
+
+    container_name: genailab-minio-init
+
+    # This container should only run once. "no" means Docker won't restart it
+    # after it exits (which is correct — bucket creation only needs to happen once).
+    restart: "no"
+
+    # Wait for minio to be healthy before running init commands.
+    depends_on:
+      minio:
+        condition: service_healthy
+
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-genailab-documents}
+
+    # What this does step by step:
+    # 1. mc alias set — register our MinIO instance as "local" with credentials
+    # 2. mc mb --ignore-existing — create the bucket (--ignore-existing means no error if it already exists)
+    # 3. mc anonymous set download — allow public download (we'll restrict this later with policies)
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Waiting for MinIO to be ready...';
+      sleep 5;
+      mc alias set local http://minio:9000 $${MINIO_ACCESS_KEY} $${MINIO_SECRET_KEY};
+      echo 'Creating bucket: $${MINIO_BUCKET}';
+      mc mb --ignore-existing local/$${MINIO_BUCKET};
+      echo 'Setting bucket policy...';
+      mc anonymous set none local/$${MINIO_BUCKET};
+      echo 'MinIO initialization complete.';
+      exit 0;
+      "
+
+    networks:
+      - genailab-network
+
+  # ==========================================================
+  # PROMETHEUS — Metrics Collection
+  # ==========================================================
+  prometheus:
+    image: prom/prometheus:v2.54.1
+
+    container_name: genailab-prometheus
+
+    restart: unless-stopped
+
+    ports:
+      # Prometheus web UI — access at: http://localhost:9090
+      # You can query metrics and check scrape status here.
+      - "${PROMETHEUS_PORT:-9090}:9090"
+
+    volumes:
+      # Prometheus configuration — tells it WHERE to scrape metrics from.
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Persistent storage for collected metrics data.
+      # Without this, all historical metrics are lost on container restart.
+      - prometheus_data:/prometheus
+
+    # Prometheus startup arguments:
+    # --config.file: path to our config (matches the volume mount above)
+    # --storage.tsdb.path: where to store time-series data
+    # --storage.tsdb.retention.time: keep 15 days of metrics (tune as needed)
+    # --web.enable-lifecycle: allows reloading config without restart (POST /-/reload)
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+
+    # Prometheus needs to reach our app to scrape metrics.
+    depends_on:
+      - app
+
+    networks:
+      - genailab-network
+
+  # ==========================================================
+  # SPRING BOOT APPLICATION
+  # ==========================================================
+  app:
+    # We build from local Dockerfile rather than pulling from a registry.
+    # This means running "docker-compose up" will build our app image first.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    
+    container_name: genailab-app
+
+    restart: unless-stopped
+
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+
+    environment:
+      # Database connection — uses Docker service name "postgres" as hostname.
+      # This resolves to the postgres container's IP via Docker's internal DNS.
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-genailab}
+      DB_USERNAME: ${DB_USERNAME:-genailab}
+      DB_PASSWORD: ${DB_PASSWORD:-genailab}
+
+      # Storage provider — "minio" for Docker environment
+      STORAGE_PROVIDER: minio
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-genailab-documents}
+
+      # OpenAI — loaded from .env file
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+
+      # JWT
+      JWT_SECRET: ${JWT_SECRET:-your-very-secret-key-that-is-at-least-32-characters-long}
+      JWT_EXPIRATION_MS: ${JWT_EXPIRATION_MS:-86400000}
+
+      # Spring profile — use "docker" profile for Docker-specific config
+      SPRING_PROFILES_ACTIVE: docker
+
+      APP_ENV: development
+
+    # App must wait for database and minio to be healthy before starting.
+    # WHY? If the app starts before postgres is ready, JPA will fail to
+    # validate/create the schema and the application will crash.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+    healthcheck:
+      # Spring Boot Actuator health endpoint.
+      # Returns HTTP 200 when app is up and all health indicators pass.
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+    networks:
+      - genailab-network
+
+# ==========================================================
+# NAMED VOLUMES — Persistent data storage
+# ==========================================================
+#
+# Named volumes are managed by Docker and live outside container lifecycles.
+# Location on host: /var/lib/docker/volumes/ (Linux)
+#                   ~/Library/Containers/com.docker.docker/... (Mac)
+#
+# To see all volumes:    docker volume ls
+# To inspect a volume:   docker volume inspect genailab_postgres_data
+# To delete a volume:    docker volume rm genailab_postgres_data  ⚠️ DELETES DATA
+#
+volumes:
+  postgres_data:
+    name: genailab_postgres_data
+  minio_data:
+    name: genailab_minio_data
+  prometheus_data:
+    name: genailab_prometheus_data
+
+# ==========================================================
+# NETWORKS — Container communication
+# ==========================================================
+#
+# All containers on the same network can communicate using
+# container names as hostnames. Containers on different
+# networks cannot communicate (isolation).
+#
+networks:
+  genailab-network:
+    name: genailab-network
+    driver: bridge

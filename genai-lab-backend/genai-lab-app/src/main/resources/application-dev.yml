@@ -61,6 +61,12 @@ genailab:
       expiration-ms: 86400000
       refresh-expiration-ms: 604800000
 
+  async:
+    core-pool-size: 2
+    max-pool-size: 4
+    queue-capacity: 20
+    thread-name-prefix: genailab-async-dev-
+
 # ============================================================
 # LOGGING — more verbose in dev
 # ============================================================

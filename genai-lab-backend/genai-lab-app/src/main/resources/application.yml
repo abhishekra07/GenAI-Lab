@@ -157,6 +157,18 @@ genailab:
       top-k: 5              # number of chunks retrieved per query
       similarity-threshold: 0.7  # minimum cosine similarity score
 
+  # ============================================================
+  # ASYNC THREAD POOL
+  # ============================================================
+  # Used by @Async methods — document processing, embedding pipeline.
+  # Without explicit config, Spring uses SimpleAsyncTaskExecutor which
+  # creates unlimited threads and has no queue — not production safe.
+  async:
+    core-pool-size: 4         # threads always kept alive
+    max-pool-size: 10         # maximum threads under load
+    queue-capacity: 50        # tasks queued when all threads busy
+    thread-name-prefix: genailab-async-
+
 # ============================================================
 # ACTUATOR & OBSERVABILITY
 # ============================================================

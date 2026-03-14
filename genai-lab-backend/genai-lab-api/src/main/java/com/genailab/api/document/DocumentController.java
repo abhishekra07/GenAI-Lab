@@ -45,13 +45,15 @@ public class DocumentController {
      *   -F "file=@/path/to/document.pdf"
      */
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<DocumentResponse> upload(@RequestParam("file") MultipartFile file,
+    public ResponseEntity<DocumentResponse> upload(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "modelId", required = false) String modelId,
             @AuthenticationPrincipal User user) {
 
-        log.info("Document upload request from user {}: {}",
-                user.getId(), file.getOriginalFilename());
+        log.info("Document upload request from user {}: {}, model: {}",
+                user.getId(), file.getOriginalFilename(), modelId);
 
-        DocumentResponse response = documentService.upload(file, user.getId());
+        DocumentResponse response = documentService.upload(file, user.getId(), modelId);
 
         // 202 Accepted — not 201 Created — because processing is async.
         // The resource exists but is not yet in its final state.

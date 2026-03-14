@@ -36,8 +36,8 @@ public class DocumentEventListener {
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onDocumentUploaded(DocumentUploadedEvent event) {
-        log.debug("Document upload committed — triggering processing for: {}",
-                event.documentId());
-        documentProcessingService.processAsync(event.documentId());
+        log.debug("Document upload committed — triggering processing for: {}, model: {}",
+                event.documentId(), event.modelId());
+        documentProcessingService.processAsync(event.documentId(), event.modelId());
     }
 }

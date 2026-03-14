@@ -136,6 +136,20 @@ public class AiProviderRegistry {
     }
 
     /**
+     * Get the embedding client directly by provider name.
+     * Returns null if no embedding client is registered for this provider.
+     *
+     * <p>Used by the RAG pipeline to resolve the embedding client from
+     * a chat model's provider — e.g. chat model "gpt-4o-mini" has
+     * provider "openai", so we look up the "openai" embedding client directly.
+     * This avoids trying to look up "text-embedding-3-small" as a model key
+     * in the DB (it is not a chat model, it is a provider implementation detail).
+     */
+    public EmbeddingClient getEmbeddingClientByProvider(String provider) {
+        return embeddingClients.get(provider);
+    }
+
+    /**
      * Check if a provider is currently registered and available.
      */
     public boolean isProviderAvailable(String provider) {
@@ -263,7 +277,8 @@ public class AiProviderRegistry {
             log.warn("  or set genailab.ai.providers.mock.enabled=true");
             log.warn("=================================================");
         } else {
-            log.info("AI Provider Registry ready. Active providers: {}", chatClients.keySet());
+            log.info("AI Provider Registry ready. Active providers: {}",
+                    chatClients.keySet());
         }
     }
 }

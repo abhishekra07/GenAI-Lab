@@ -28,7 +28,7 @@ genailab:
     #   mock       — instant fake responses, no cost
     #   gpt-4o-mini — real OpenAI (requires key + credits)
     # -------------------------------------------------------
-    default-model: gpt-4o-mini
+    default-model: mock
 
     providers:
       # Mock always enabled in dev

@@ -2,15 +2,15 @@ package com.genailab.document.service;
 
 import com.genailab.document.chunking.TextChunkingService;
 import com.genailab.document.event.ChunksReadyEvent;
-import com.genailab.document.extractor.exception.TextExtractionException;
-import com.genailab.storage.service.StorageService;
 import org.springframework.context.ApplicationEventPublisher;
 import com.genailab.document.domain.Document;
 import com.genailab.document.domain.DocumentChunk;
 import com.genailab.document.domain.DocumentStatus;
 import com.genailab.document.extractor.TextExtractor;
+import com.genailab.document.extractor.exception.TextExtractionException;
 import com.genailab.document.repository.DocumentChunkRepository;
 import com.genailab.document.repository.DocumentRepository;
+import com.genailab.storage.service.StorageService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -91,10 +91,10 @@ public class DocumentProcessingService {
      * even if a later step fails. We use separate transactions per stage
      * so that PROCESSING status is visible immediately.
      */
-    public void processAsync(UUID documentId) {
-        log.info("Starting async processing for document: {}", documentId);
+    public void processAsync(UUID documentId, String modelId) {
+        log.info("Starting async processing for document: {}, model: {}", documentId, modelId);
         try {
-            process(documentId);
+            process(documentId, modelId);
         } catch (Exception e) {
             log.error("Unhandled exception during document processing {}: {}",
                     documentId, e.getMessage(), e);
@@ -102,7 +102,7 @@ public class DocumentProcessingService {
         }
     }
 
-    private void process(UUID documentId) {
+    private void process(UUID documentId, String modelId) {
         Document document = documentRepository.findById(documentId)
                 .orElseThrow(() -> new IllegalStateException(
                         "Document not found for processing: " + documentId));
@@ -152,7 +152,7 @@ public class DocumentProcessingService {
         // generates embeddings, then publishes EmbeddingCompleteEvent.
         // DocumentStatusListener then marks the document READY or FAILED.
         // This keeps genai-lab-document independent of genai-lab-rag.
-        eventPublisher.publishEvent(new ChunksReadyEvent(document.getId(), null));
+        eventPublisher.publishEvent(new ChunksReadyEvent(document.getId(), modelId));
         log.info("Chunks saved for document {} — embedding pipeline triggered via event",
                 document.getId());
 

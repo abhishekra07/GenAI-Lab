@@ -5,8 +5,8 @@ import com.genailab.document.domain.DocumentStatus;
 import com.genailab.document.dto.DocumentResponse;
 import com.genailab.document.repository.DocumentChunkRepository;
 import com.genailab.document.repository.DocumentRepository;
-import com.genailab.common.exception.ResourceNotFoundException;
 import com.genailab.storage.dto.StorageResult;
+import com.genailab.common.exception.ResourceNotFoundException;
 import com.genailab.storage.service.StorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -62,7 +62,7 @@ public class DocumentService {
      * no manual synchronization code, clean and idiomatic Spring.
      */
     @Transactional
-    public DocumentResponse upload(MultipartFile file, UUID userId) {
+    public DocumentResponse upload(MultipartFile file, UUID userId, String modelId) {
         validateFile(file);
 
         String fileType = resolveFileType(file);
@@ -86,7 +86,7 @@ public class DocumentService {
 
         // Publish event — Spring holds this until the transaction commits,
         // then fires DocumentEventListener.onDocumentUploaded() on a new thread.
-        eventPublisher.publishEvent(new DocumentUploadedEvent(saved.getId()));
+        eventPublisher.publishEvent(new DocumentUploadedEvent(saved.getId(), modelId));
 
         return toResponse(saved);
     }

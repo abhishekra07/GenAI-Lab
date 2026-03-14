@@ -5,19 +5,22 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.hibernate.annotations.Array;
-import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 import java.util.UUID;
 
 /**
- * Stores a vector embedding for a single document chunk.
+ * Represents a stored vector embedding for a document chunk.
  *
- * <p>The embedding column uses pgvector's vector type (1536 dimensions).
- * Hibernate maps this via @JdbcTypeCode(SqlTypes.VECTOR) with @Array(length = 1536).
+ * <p>Maps to the document_embeddings table.
  *
+ * <p>NOTE: The embedding column (vector type) is intentionally omitted
+ * from this JPA entity. Hibernate cannot map float[] to pgvector's vector
+ * type without additional integration — it serializes as bytea instead.
+ *
+ * <p>Vector inserts are handled by EmbeddingPipeline via JdbcTemplate
+ * with an explicit CAST to vector type. This entity is used for
+ * metadata queries (exists check, delete by document) only.
  */
 @Entity
 @Table(name = "document_embeddings")
@@ -38,24 +41,6 @@ public class DocumentEmbedding {
     @Column(name = "document_id", nullable = false)
     private UUID documentId;
 
-    /**
-     * The vector embedding — 1536 float values for text-embedding-3-small.
-     *
-     * <p>Stored as pgvector's vector(1536) type.
-     * @Array(length = 1536) tells Hibernate the array size.
-     * @JdbcTypeCode(SqlTypes.VECTOR) maps it to pgvector's vector SQL type.
-     */
-    @JdbcTypeCode(SqlTypes.VECTOR)
-    @Array(length = 1536)
-    @Column(name = "embedding", nullable = false, columnDefinition = "vector(1536)")
-    private float[] embedding;
-
-    /**
-     * Which embedding model produced this vector.
-     * Example: "text-embedding-3-small", "mock-embedding-model"
-     * Stored for traceability — if you switch models, you know
-     * which embeddings need to be regenerated.
-     */
     @Column(name = "embedding_model", nullable = false, length = 100)
     private String embeddingModel;
 

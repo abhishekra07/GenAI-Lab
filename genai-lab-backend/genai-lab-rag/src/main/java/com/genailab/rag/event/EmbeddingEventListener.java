@@ -44,7 +44,7 @@ public class EmbeddingEventListener {
                     EmbeddingCompleteEvent.success(event.documentId(),
                             embeddingPipeline.getLastEmbeddingCount()));
         } catch (Exception e) {
-            log.error("Embedding failed for document {}: {}", event.documentId(), e.getMessage());
+            log.error("Embedding failed for document {}: error: {}, cause : {}", event.documentId(), e.getMessage(), e.getCause());
             eventPublisher.publishEvent(
                     EmbeddingCompleteEvent.failure(event.documentId(), e.getMessage()));
         }

@@ -1,6 +1,6 @@
 package com.genailab.storage.config;
 
-import com.genailab.storage.StorageService;
+import com.genailab.storage.service.StorageService;
 import com.genailab.storage.local.LocalStorageService;
 import com.genailab.storage.minio.MinioStorageService;
 import lombok.extern.slf4j.Slf4j;

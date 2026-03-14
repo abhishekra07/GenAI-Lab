@@ -1,8 +1,8 @@
 package com.genailab.storage.minio;
 
-import com.genailab.storage.StorageException;
-import com.genailab.storage.StorageResult;
-import com.genailab.storage.StorageService;
+import com.genailab.storage.exception.StorageException;
+import com.genailab.storage.dto.StorageResult;
+import com.genailab.storage.service.StorageService;
 import com.genailab.storage.config.StorageProperties;
 import io.minio.*;
 import io.minio.errors.ErrorResponseException;

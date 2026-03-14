@@ -1,8 +1,8 @@
 package com.genailab.storage.local;
 
-import com.genailab.storage.StorageException;
-import com.genailab.storage.StorageResult;
-import com.genailab.storage.StorageService;
+import com.genailab.storage.exception.StorageException;
+import com.genailab.storage.dto.StorageResult;
+import com.genailab.storage.service.StorageService;
 import com.genailab.storage.config.StorageProperties;
 import lombok.extern.slf4j.Slf4j;
 

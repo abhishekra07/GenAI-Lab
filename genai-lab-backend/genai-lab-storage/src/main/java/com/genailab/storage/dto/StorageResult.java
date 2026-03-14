@@ -1,4 +1,4 @@
-package com.genailab.storage;
+package com.genailab.storage.dto;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;

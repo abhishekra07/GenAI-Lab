@@ -1,4 +1,4 @@
-package com.genailab.storage;
+package com.genailab.storage.exception;
 
 /**
  * Thrown when a storage operation fails.

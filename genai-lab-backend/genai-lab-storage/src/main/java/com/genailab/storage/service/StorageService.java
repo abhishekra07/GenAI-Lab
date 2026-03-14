@@ -1,5 +1,7 @@
-package com.genailab.storage;
+package com.genailab.storage.service;
 
+import com.genailab.storage.dto.StorageResult;
+import com.genailab.storage.exception.StorageException;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;

@@ -2,6 +2,7 @@ package com.genailab.rag.service;
 
 import com.genailab.ai.model.*;
 import com.genailab.ai.registry.AiProviderRegistry;
+import com.genailab.metrics.AiMetrics;
 import com.genailab.document.domain.Document;
 import com.genailab.document.domain.DocumentStatus;
 import com.genailab.document.service.DocumentService;
@@ -39,6 +40,7 @@ public class RagService {
     private final VectorSearchService vectorSearchService;
     private final DocumentService documentService;
     private final AiProviderRegistry aiProviderRegistry;
+    private final AiMetrics aiMetrics;
 
     @Value("${genailab.ai.default-model:gpt-4o-mini}")
     private String defaultModelId;
@@ -46,7 +48,10 @@ public class RagService {
     /**
      * Answer a question about a document using RAG.
      */
-    public DocumentQueryResponse query(UUID documentId, DocumentQueryRequest request, UUID userId) {
+    public DocumentQueryResponse query(
+            UUID documentId,
+            DocumentQueryRequest request,
+            UUID userId) {
 
         // Validate document exists and belongs to user
         Document document = documentService.findOwnedDocument(documentId, userId);
@@ -101,7 +106,8 @@ public class RagService {
                 aiResponse.getTokenUsage() != null
                         ? aiResponse.getTokenUsage().getTotalTokens() : 0);
 
-        // Step 5: Build response with source citations
+        // Step 5: Record metrics and build response
+        aiMetrics.recordRagQuery(modelId, retrievedChunks.size());
         return buildResponse(aiResponse, retrievedChunks, modelId);
     }
 

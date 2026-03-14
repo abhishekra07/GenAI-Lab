@@ -6,6 +6,19 @@
 
     <modelVersion>4.0.0</modelVersion>
 
+    <!--
+        PARENT: Spring Boot BOM (Bill of Materials)
+        ============================================
+        By declaring spring-boot-starter-parent as our parent, we inherit:
+          - Curated dependency versions (no version conflicts)
+          - Default Maven plugin configurations
+          - Java compiler settings
+          - Resource filtering configuration
+          - Default test configuration (Surefire plugin)
+
+        We do NOT inherit any actual Spring Boot code here — just version management.
+        This is the single most important line in the entire project for dependency hygiene.
+    -->
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
@@ -13,6 +26,16 @@
         <relativePath/>
     </parent>
 
+    <!--
+        PROJECT COORDINATES
+        ===================
+        groupId    — identifies your organization/project namespace
+        artifactId — the name of THIS artifact (the parent aggregator)
+        version    — SNAPSHOT means "in development, not a release"
+        packaging  — "pom" is required for aggregator/parent projects.
+                     A pom-packaged project contains no code itself —
+                     it only aggregates and manages child modules.
+    -->
     <groupId>com.genailab</groupId>
     <artifactId>genai-lab-backend</artifactId>
     <version>0.0.1-SNAPSHOT</version>
@@ -27,6 +50,12 @@
         This tells Maven which child modules exist and in what ORDER to build them.
         Maven resolves the build order based on inter-module dependencies,
         but listing them here tells Maven where to find them on disk.
+
+        Build order matters: if module B depends on module A,
+        Maven must build A first so B can find it in the local repository.
+
+        Order here reflects the dependency hierarchy:
+          common → (security, ai, storage) → (chat, document) → rag → (api, metrics) → app
     -->
     <modules>
         <module>genai-lab-common</module>
@@ -41,6 +70,17 @@
         <module>genai-lab-app</module>
     </modules>
 
+    <!--
+        PROPERTIES
+        ==========
+        Centralised version declarations.
+        Any child pom can reference these with ${property.name}.
+
+        WHY centralise versions here?
+        If you need to upgrade JJWT from 0.12.5 to 0.12.6,
+        you change ONE line here and ALL modules that use it get the upgrade.
+        Without this, you'd hunt through every child pom.xml to find and update versions.
+    -->
     <properties>
         <!-- Java version — 21 is the current LTS with virtual threads -->
         <java.version>21</java.version>
@@ -73,9 +113,31 @@
         <testcontainers.version>1.20.1</testcontainers.version>
     </properties>
 
+    <!--
+        DEPENDENCY MANAGEMENT
+        =====================
+        This section declares versions for dependencies WITHOUT adding them to the project.
+        Child modules can then declare the dependency WITHOUT a version tag —
+        they inherit the version from here.
+
+        This is different from <dependencies> which actually adds dependencies.
+        <dependencyManagement> is purely a version registry.
+
+        Think of it as a price list — declaring a price doesn't mean you bought anything.
+        Child modules "buy" (declare) the dependency, and the price (version) comes from here.
+    -->
     <dependencyManagement>
         <dependencies>
 
+            <!--
+                Spring AI BOM (Bill of Materials)
+                Spring AI is NOT part of Spring Boot's BOM, so we must import it separately.
+                By importing it as a BOM with scope=import and type=pom,
+                we get Spring AI's curated version set merged into our dependency management.
+
+                This ensures all Spring AI modules (openai, embeddings, vector stores etc.)
+                use compatible versions with each other.
+            -->
             <dependency>
                 <groupId>org.springframework.ai</groupId>
                 <artifactId>spring-ai-bom</artifactId>
@@ -136,6 +198,16 @@
                 <version>${project.version}</version>
             </dependency>
 
+            <!-- ==================== SECURITY / JWT ==================== -->
+            <!--
+                JJWT (Java JWT) — three artifacts that must be used together:
+                  - jjwt-api      : the interfaces/annotations you code against
+                  - jjwt-impl     : the runtime implementation (scope=runtime, not needed at compile time)
+                  - jjwt-jackson  : Jackson-based JSON serialization for JWT claims (scope=runtime)
+
+                Why split like this? The api/impl split lets you code against stable interfaces
+                while swapping implementations. You never import impl classes in your code.
+            -->
             <dependency>
                 <groupId>io.jsonwebtoken</groupId>
                 <artifactId>jjwt-api</artifactId>
@@ -154,36 +226,74 @@
                 <scope>runtime</scope>
             </dependency>
 
+            <!-- ==================== DATABASE ==================== -->
+            <!--
+                pgvector Java client — allows storing/querying vector embeddings
+                in PostgreSQL via pgvector extension.
+                Spring Boot's BOM doesn't include this, so we manage its version here.
+            -->
             <dependency>
                 <groupId>com.pgvector</groupId>
                 <artifactId>pgvector</artifactId>
                 <version>${pgvector.version}</version>
             </dependency>
 
+            <!-- ==================== STORAGE ==================== -->
+            <!--
+                MinIO Java SDK — S3-compatible object storage client.
+                Used by our MinioStorageService implementation.
+                The abstraction layer means most code never sees this dependency.
+            -->
             <dependency>
                 <groupId>io.minio</groupId>
                 <artifactId>minio</artifactId>
                 <version>${minio.version}</version>
             </dependency>
 
+            <!-- ==================== DOCUMENT PARSING ==================== -->
+            <!--
+                Apache PDFBox — extracts text from PDF files.
+                We use the "app" artifact which includes everything needed.
+            -->
             <dependency>
                 <groupId>org.apache.pdfbox</groupId>
                 <artifactId>pdfbox</artifactId>
                 <version>${apache-pdfbox.version}</version>
             </dependency>
 
+            <!--
+                Apache POI — extracts text from DOCX (and XLS/XLSX) files.
+                poi-ooxml is the artifact that handles Open XML formats (docx, xlsx).
+                poi is the base artifact (required by poi-ooxml).
+            -->
             <dependency>
                 <groupId>org.apache.poi</groupId>
                 <artifactId>poi-ooxml</artifactId>
                 <version>${apache-poi.version}</version>
             </dependency>
 
+            <!-- ==================== MAPPING ==================== -->
+            <!--
+                MapStruct — compile-time bean mapper.
+                Generates mapping code at compile time (no reflection at runtime).
+                Much faster and safer than runtime mappers like ModelMapper/Dozer.
+
+                We use it to map between domain entities and API DTOs,
+                keeping the API layer decoupled from the domain model.
+            -->
             <dependency>
                 <groupId>org.mapstruct</groupId>
                 <artifactId>mapstruct</artifactId>
                 <version>${mapstruct.version}</version>
             </dependency>
 
+            <!-- ==================== TESTING ==================== -->
+            <!--
+                Testcontainers BOM — manages versions for all testcontainers modules.
+                Testcontainers spins up real Docker containers during tests,
+                so we can test against a real PostgreSQL with pgvector, real MinIO, etc.
+                Far more reliable than in-memory mocks for integration tests.
+            -->
             <dependency>
                 <groupId>org.testcontainers</groupId>
                 <artifactId>testcontainers-bom</artifactId>
@@ -195,9 +305,34 @@
         </dependencies>
     </dependencyManagement>
 
+    <!--
+        BUILD CONFIGURATION
+        ===================
+        Plugin management — same concept as dependencyManagement but for plugins.
+        Declares plugin versions and default configuration that child modules inherit.
+    -->
     <build>
         <pluginManagement>
             <plugins>
+
+                <!--
+                    Maven Compiler Plugin
+                    Configures how Java source is compiled.
+
+                    Key settings:
+                    - source/target: Java 21
+                    - annotationProcessorPaths: CRITICAL for Lombok + MapStruct.
+
+                    Why annotationProcessorPaths?
+                    Lombok generates code (getters, builders, etc.) BEFORE compilation.
+                    MapStruct generates mapper implementations AFTER Lombok runs.
+                    The ORDER matters — Lombok must run first so MapStruct sees
+                    the Lombok-generated methods when creating mapper code.
+
+                    Without this explicit ordering, MapStruct might generate
+                    mappers that call getters that don't exist yet (Lombok hasn't run).
+                    This is one of the most common misconfiguration mistakes.
+                -->
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
@@ -224,6 +359,12 @@
                     </configuration>
                 </plugin>
 
+                <!--
+                    Maven Surefire Plugin
+                    Runs unit tests (src/test/java).
+                    Spring Boot parent already configures this, but we explicitly
+                    configure it to use the JUnit Platform (JUnit 5 requires this).
+                -->
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>

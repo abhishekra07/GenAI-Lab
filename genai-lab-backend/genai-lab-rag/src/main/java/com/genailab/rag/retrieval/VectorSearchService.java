@@ -4,46 +4,38 @@ import com.genailab.ai.embedding.EmbeddingClient;
 import com.genailab.ai.registry.AiProviderRegistry;
 import com.genailab.ai.repository.AiModelConfigRepository;
 import com.genailab.document.domain.DocumentChunk;
-import com.pgvector.PGvector;
-import javax.sql.DataSource;
-import java.sql.Connection;
-import java.sql.SQLException;
 import com.genailab.document.repository.DocumentChunkRepository;
-import com.genailab.rag.repository.DocumentEmbeddingRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
 /**
- * Performs semantic vector search over document embeddings.
+ * Performs semantic vector search over document embeddings using JdbcTemplate.
  *
- * <p>Given a user query and a document, finds the most semantically
- * relevant chunks using cosine similarity in pgvector.
+ * <p>WHY JdbcTemplate instead of JPA repository?
+ * The pgvector <=> operator requires the query parameter to be of type vector.
+ * JPA/Hibernate does not understand the PGvector type — it serializes it as
+ * bytea causing "operator does not exist: vector <=> bytea".
  *
- * <p>Flow:
- * <ol>
- *   <li>Embed the user's query using the same model used for document chunks</li>
- *   <li>Run cosine similarity search against stored embeddings</li>
- *   <li>Load the actual chunk text for the top-K results</li>
- *   <li>Return ranked chunks with their similarity scores</li>
- * </ol>
+ * <p>The fix: inline the vector as a string literal directly in the SQL using
+ * String.format(). The vector string is generated from the embedding API
+ * response (floats only — no user input), so there is zero SQL injection risk.
+ * This completely bypasses the JDBC type system for the vector parameter.
  */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class VectorSearchService {
 
-    private final DocumentEmbeddingRepository embeddingRepository;
     private final DocumentChunkRepository chunkRepository;
     private final AiProviderRegistry aiProviderRegistry;
     private final AiModelConfigRepository modelConfigRepository;
-    private final DataSource dataSource;
+    private final JdbcTemplate jdbcTemplate;
 
     @Value("${genailab.rag.retrieval.top-k:5}")
     private int defaultTopK;
@@ -54,57 +46,67 @@ public class VectorSearchService {
     @Value("${genailab.ai.default-model:gpt-4o-mini}")
     private String defaultModelId;
 
-    /**
-     * Find the most relevant chunks for a query within a document.
-     *
-     * @param documentId the document to search within
-     * @param query      the user's natural language question
-     * @param modelId    the chat model (used to resolve embedding model)
-     * @return ranked list of relevant chunks, most similar first
-     */
     public List<RetrievedChunk> search(UUID documentId, String query, String modelId) {
-        log.debug("Vector search for document: {}, query length: {}", documentId, query.length());
+        log.debug("Vector search for document: {}, query length: {}, threshold: {}",
+                documentId, query.length(), 1.0 - similarityThreshold);
 
-        // Embed the query using same model as document chunks
         EmbeddingClient embeddingClient = resolveEmbeddingClient(modelId);
         List<Float> queryEmbedding = embeddingClient.embed(query);
 
-        // Register PGvector type and create PGvector parameter for the query
-        try (Connection conn = dataSource.getConnection()) {
-            PGvector.addVectorType(conn);
-        } catch (SQLException e) {
-            throw new RuntimeException("Failed to register PGvector type", e);
-        }
-
-        float[] queryFloats = toFloatArray(queryEmbedding);
-        PGvector pgVector = new PGvector(queryFloats);
-
-        // cosine distance threshold = 1 - similarity threshold
-        // similarity 0.7 → distance 0.3
+        // Convert to pgvector string format: [0.1,0.2,0.3,...]
+        // Inlined directly into SQL — no JDBC type binding needed for the vector.
+        String vectorLiteral = toVectorString(queryEmbedding);
         double distanceThreshold = 1.0 - similarityThreshold;
 
-        // Run vector similarity search
-        List<Object[]> results = embeddingRepository.findSimilarChunks(
+        String sql = String.format("""
+                SELECT de.chunk_id, (de.embedding <=> '%s'::vector) AS distance
+                FROM document_embeddings de
+                WHERE de.document_id = ?
+                AND (de.embedding <=> '%s'::vector) < ?
+                ORDER BY de.embedding <=> '%s'::vector
+                LIMIT ?
+                """, vectorLiteral, vectorLiteral, vectorLiteral);
+
+        List<Object[]> results = jdbcTemplate.query(
+                sql,
+                (rs, rowNum) -> new Object[]{
+                        UUID.fromString(rs.getString("chunk_id")),
+                        rs.getDouble("distance")
+                },
                 documentId,
-                pgVector,
-                defaultTopK,
-                distanceThreshold
+                distanceThreshold,
+                defaultTopK
         );
 
         if (results.isEmpty()) {
-            log.debug("No similar chunks found for query in document: {}", documentId);
+            // Debug: run without threshold to see actual distances
+            String debugSql = String.format(
+                    "SELECT de.chunk_id, (de.embedding <=> '%s'::vector) AS distance " +
+                            "FROM document_embeddings de WHERE de.document_id = ? " +
+                            "ORDER BY de.embedding <=> '%s'::vector LIMIT 5",
+                    vectorLiteral, vectorLiteral);
+            List<Object[]> debugResults = jdbcTemplate.query(debugSql,
+                    (rs, rowNum) -> new Object[]{rs.getString("chunk_id"), rs.getDouble("distance")},
+                    documentId);
+            if (debugResults.isEmpty()) {
+                log.warn("No embeddings found at all for document: {} — was it processed?", documentId);
+            } else {
+                log.warn("Chunks exist but all outside threshold {}. Actual distances: {}",
+                        distanceThreshold,
+                        debugResults.stream()
+                                .map(r -> String.format("%.4f", (double) r[1]))
+                                .toList());
+            }
             return List.of();
         }
 
         log.debug("Found {} similar chunks", results.size());
 
-        // Load actual chunk content for the results
         return results.stream()
                 .map(row -> {
                     UUID chunkId = (UUID) row[0];
-                    double distance = ((Number) row[1]).doubleValue();
+                    double distance = (double) row[1];
                     double similarity = 1.0 - distance;
-
                     return chunkRepository.findById(chunkId)
                             .map(chunk -> new RetrievedChunk(chunk, similarity))
                             .orElse(null);
@@ -121,7 +123,6 @@ public class VectorSearchService {
         String resolvedModelId = modelId != null ? modelId : defaultModelId;
         return modelConfigRepository.findByModelKey(resolvedModelId)
                 .map(config -> {
-                    // Use provider to look up embedding client — same logic as EmbeddingPipeline
                     String provider = config.getProvider();
                     EmbeddingClient client = aiProviderRegistry.getEmbeddingClientByProvider(provider);
                     if (client != null) return client;
@@ -130,27 +131,25 @@ public class VectorSearchService {
                 .orElseGet(() -> aiProviderRegistry.getDefaultEmbeddingClient());
     }
 
-    private float[] toFloatArray(List<Float> list) {
-        float[] array = new float[list.size()];
-        for (int i = 0; i < list.size(); i++) {
-            array[i] = list.get(i);
+    /**
+     * Converts a float list to pgvector string format: [0.1,0.2,0.3]
+     * Values come from the embedding API — floats only, no user input.
+     */
+    private String toVectorString(List<Float> embedding) {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < embedding.size(); i++) {
+            sb.append(embedding.get(i));
+            if (i < embedding.size() - 1) sb.append(",");
         }
-        return array;
+        sb.append("]");
+        return sb.toString();
     }
 
-    /**
-     * A retrieved chunk with its similarity score.
-     */
     public record RetrievedChunk(DocumentChunk chunk, double similarity) {
 
-        /**
-         * Format for inclusion in the AI context prompt.
-         * Includes source attribution so the AI can cite its sources.
-         */
         public String toContextString() {
             return String.format(
-                    "[Source: %s, chunk %d, similarity: %.2f]\n%s",
-                    chunk.getDocumentId(),
+                    "[Source: chunk %d, similarity: %.2f]\n%s",
                     chunk.getChunkIndex(),
                     similarity,
                     chunk.getContent()

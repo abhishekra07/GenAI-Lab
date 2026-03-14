@@ -58,6 +58,7 @@ genailab:
   security:
     jwt:
       secret: dev-secret-key-only-for-local-development-not-for-production
+      # 24 hours in dev so you don't need to refresh constantly while testing
       expiration-ms: 86400000
       refresh-expiration-ms: 604800000
 

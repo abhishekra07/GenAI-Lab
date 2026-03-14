@@ -142,9 +142,12 @@ genailab:
     jwt:
       # Minimum 32 characters for HS256.
       # Generate a strong secret: openssl rand -base64 64
-      secret: ${JWT_SECRET:your-very-secret-key-that-is-at-least-32-characters-long}
-      expiration-ms: ${JWT_EXPIRATION_MS:86400000}
-      refresh-expiration-ms: ${JWT_REFRESH_EXPIRATION_MS:604800000}
+      secret: your-very-secret-key-that-is-at-least-32-characters-long
+      # Access token: 15 minutes (900000ms) — short-lived, cannot be revoked
+      # If stolen, attacker has max 15 min window
+      expiration-ms: 900000
+      # Refresh token: 7 days (604800000ms) — stored in DB, can be revoked
+      refresh-expiration-ms: 604800000
 
   # ============================================================
   # RAG PIPELINE

@@ -6,7 +6,6 @@ import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.embedding.EmbeddingRequest;
 import org.springframework.ai.openai.OpenAiEmbeddingOptions;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
 
 import java.util.List;
 
@@ -18,7 +17,6 @@ import java.util.List;
  * that are stored in the document_embeddings table.
  *
  */
-@Component
 @Slf4j
 public class OpenAiEmbeddingClientImpl implements EmbeddingClient {
 

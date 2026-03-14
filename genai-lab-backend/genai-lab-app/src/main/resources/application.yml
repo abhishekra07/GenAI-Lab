@@ -1,24 +1,14 @@
-# ============================================================
-# GenAI Lab — Application Configuration
-# ============================================================
-# This is the main configuration file loaded by Spring Boot.
-# All values here can be overridden by:
-#   1. Environment variables (SPRING_DATASOURCE_URL overrides spring.datasource.url)
-#   2. application-{profile}.yml files (application-prod.yml for production)
-#   3. System properties (-Dspring.datasource.url=...)
-# ============================================================
-
 spring:
   application:
     name: genai-lab-backend
 
-  # ==========================
-  # DATABASE CONFIGURATION
-  # ==========================
+  # =========
+  # DATABASE
+  # =========
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:genailab}
-    username: ${DB_USERNAME:genailab}
-    password: ${DB_PASSWORD:genailab}
+    url: jdbc:postgresql://localhost:5432/genailab
+    username: genailab
+    password: genailab
     driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: 10
@@ -27,13 +17,9 @@ spring:
       idle-timeout: 600000
       max-lifetime: 1800000
       pool-name: GenAiLabHikariPool
-
-  # ==============================
-  # JPA / HIBERNATE CONFIGURATION
-  # ==============================
   jpa:
     # "validate" — Hibernate checks schema matches entities but never alters it.
-    # Flyway owns the schema. JPA should never create or drop tables.
+    # Flyway owns the schema — JPA should never create or drop tables.
     hibernate:
       ddl-auto: validate
     properties:
@@ -45,11 +31,9 @@ spring:
           batch_size: 25
         order_inserts: true
         order_updates: true
+    # Disable open-in-view — prevents connection pool exhaustion under load
     open-in-view: false
 
-  # =============================
-  # FLYWAY — DATABASE MIGRATIONS
-  # =============================
   flyway:
     enabled: true
     locations: classpath:db/migration
@@ -57,36 +41,88 @@ spring:
     baseline-on-migrate: false
     validate-on-migrate: true
 
-  # ============
+  # =============
   # FILE UPLOAD
-  # ============
+  # =============
   servlet:
     multipart:
       enabled: true
       max-file-size: 50MB
       max-request-size: 50MB
 
-  # ============================
-  # SPRING AI — OpenAI Provider
-  # ============================
+  # ============================================================
+  # SPRING AI — OpenAI auto-configuration
+  # Spring AI reads these to create ChatModel and EmbeddingModel beans.
+  # AiProviderRegistry uses those beans when initialising providers.
+  # ============================================================
   ai:
-    default-model: ${AI_DEFAULT_MODEL:gpt-4o-mini} #mock gpt-4o-mini
-    mock:
-      enabled: true
     openai:
-      enabled: true
-      api-key: ${OPENAI_API_KEY}
-      chat-model: gpt-4o-mini
-      embedding-model: text-embedding-3-small
-    anthropic:
-      enabled: false                        # flip to true when ready
-      api-key: ${ANTHROPIC_API_KEY:}
-      chat-model: claude-3-5-sonnet-20241022
+      api-key: ${OPENAI_API_KEY:}
+      chat:
+        options:
+          model: gpt-4o-mini
+          temperature: 0.7
+          max-tokens: 2048
+      embedding:
+        options:
+          # text-embedding-3-small = 1536 dimensions
+          # This MUST match the vector(1536) column in document_embeddings
+          model: text-embedding-3-small
 
-# ============================
+# =============================
 # GENAI LAB CUSTOM PROPERTIES
-# ============================
+# =============================
 genailab:
+
+  # =================
+  # AI CONFIGURATION
+  # =================
+  ai:
+    # Default model used when a request does not specify one.
+    # Must match a model_key in the ai_model_configs table.
+    default-model: ${AI_DEFAULT_MODEL:gpt-4o-mini}
+    providers:
+      # ----------------------------------------------------------
+      # OpenAI — https://platform.openai.com/api-keys
+      # Provider is skipped at startup if api-key is empty.
+      # ----------------------------------------------------------
+      openai:
+        enabled: true
+        api-key: ${OPENAI_API_KEY:}
+        base-url: https://api.openai.com
+        chat-model: gpt-4o-mini
+        embedding-model: text-embedding-3-small
+
+      # ----------------------------------------------------------
+      # Anthropic Claude — https://console.anthropic.com
+      # Set enabled=true and provide ANTHROPIC_API_KEY when ready.
+      # ----------------------------------------------------------
+      anthropic:
+        enabled: false
+        api-key: ${ANTHROPIC_API_KEY:}
+        base-url: https://api.anthropic.com
+        chat-model: claude-3-5-sonnet-20241022
+
+      # ----------------------------------------------------------
+      # Ollama — local models, no API key required
+      # Install: https://ollama.ai  then: ollama pull llama3.2
+      # ----------------------------------------------------------
+      ollama:
+        enabled: false
+        base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+        chat-model: llama3.2
+        embedding-model: nomic-embed-text
+
+      # ----------------------------------------------------------
+      # Mock — development and testing ONLY
+      # NEVER enable in production.
+      # ----------------------------------------------------------
+      mock:
+        enabled: ${MOCK_AI_ENABLED:false}
+
+  # =========
+  # STORAGE
+  # =========
   storage:
     # "local" or "minio" — selects which StorageService bean is used
     provider: ${STORAGE_PROVIDER:local}
@@ -99,24 +135,31 @@ genailab:
       bucket-name: ${MINIO_BUCKET:genailab-documents}
       secure: false
 
+  # ===============
+  # SECURITY / JWT
+  # ===============
   security:
     jwt:
-      # Minimum 32 characters for HS256. Generate with: openssl rand -base64 64
+      # Minimum 32 characters for HS256.
+      # Generate a strong secret: openssl rand -base64 64
       secret: ${JWT_SECRET:your-very-secret-key-that-is-at-least-32-characters-long}
       expiration-ms: ${JWT_EXPIRATION_MS:86400000}
       refresh-expiration-ms: ${JWT_REFRESH_EXPIRATION_MS:604800000}
 
+  # ============================================================
+  # RAG PIPELINE
+  # ============================================================
   rag:
     chunking:
-      chunk-size: 512
-      chunk-overlap: 50
+      chunk-size: 512       # tokens per chunk (approx 4 chars/token = ~2048 chars)
+      chunk-overlap: 50     # overlap between consecutive chunks
     retrieval:
-      top-k: 5
-      similarity-threshold: 0.7
+      top-k: 5              # number of chunks retrieved per query
+      similarity-threshold: 0.7  # minimum cosine similarity score
 
-# =========================
+# ============================================================
 # ACTUATOR & OBSERVABILITY
-# =========================
+# ============================================================
 management:
   endpoints:
     web:
@@ -136,9 +179,9 @@ management:
       application: ${spring.application.name}
       environment: ${APP_ENV:development}
 
-# ========
+# ============================================================
 # LOGGING
-# ========
+# ============================================================
 logging:
   level:
     root: INFO
@@ -150,9 +193,9 @@ logging:
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
 
-# =======
+# ============================================================
 # SERVER
-# =======
+# ============================================================
 server:
   port: ${SERVER_PORT:8080}
   shutdown: graceful

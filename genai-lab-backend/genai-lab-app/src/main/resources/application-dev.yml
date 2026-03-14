@@ -1,9 +1,3 @@
-# ============================================================
-# IMPORTANT: Never commit real API keys or passwords here.
-# This file is committed to Git — keep it safe.
-# Real secrets go in application-dev-local.yml (gitignored).
-# ============================================================
-
 spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/genailab
@@ -15,36 +9,61 @@ spring:
     properties:
       hibernate:
         show_sql: true
-        format_sql: true
+        format_sql: false
+
+  # ============================================================
+  # SPRING AI — key comes from application-dev-local.yml
+  # ============================================================
   ai:
-    default-model: ${AI_DEFAULT_MODEL:gpt-4o-mini} #mock gpt-4o-mini
-    mock:
-      enabled: false
     openai:
-      enabled: true
-      api-key: ${OPENAI_API_KEY}
-      chat-model: gpt-4o-mini
-      embedding-model: text-embedding-3-small
-    anthropic:
-      enabled: false                        # flip to true when ready
-      api-key: ${ANTHROPIC_API_KEY:}
-      chat-model: claude-3-5-sonnet-20241022
+      api-key: ${OPENAI_API_KEY:}
+
+# ============================================================
+# GENAI LAB CUSTOM PROPERTIES — DEV OVERRIDES
+# ============================================================
 genailab:
+  ai:
+    # -------------------------------------------------------
+    # SWITCH HERE to change between mock and real AI:
+    #   mock       — instant fake responses, no cost
+    #   gpt-4o-mini — real OpenAI (requires key + credits)
+    # -------------------------------------------------------
+    default-model: mock
+
+    providers:
+      # Mock always enabled in dev
+      mock:
+        enabled: true
+
+      # OpenAI available in dev — needs key in application-dev-local.yml
+      openai:
+        enabled: true
+        api-key: ${OPENAI_API_KEY:}
+
+  # ============================================================
+  # STORAGE — MinIO running in Docker
+  # ============================================================
   storage:
     provider: minio
-#    local:
-#      base-path: ${LOCAL_STORAGE_PATH:./uploads}
     minio:
       endpoint: http://localhost:9000
       access-key: minioadmin
-      secret-key: minioadmin
+      secret-key: minioadmin_dev_password
       bucket-name: genailab-documents
       secure: false
+
+  # ============================================================
+  # JWT — dev-only secret, safe to commit
+  # ============================================================
   security:
     jwt:
       secret: dev-secret-key-only-for-local-development-not-for-production
       expiration-ms: 86400000
       refresh-expiration-ms: 604800000
+
+# ============================================================
+# LOGGING — more verbose in dev
+# ============================================================
 logging:
   level:
     root: INFO

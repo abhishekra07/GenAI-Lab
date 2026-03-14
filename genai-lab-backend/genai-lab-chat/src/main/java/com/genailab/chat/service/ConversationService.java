@@ -4,6 +4,7 @@ import com.genailab.chat.domain.Conversation;
 import com.genailab.chat.dto.ConversationResponse;
 import com.genailab.chat.dto.CreateConversationRequest;
 import com.genailab.chat.repository.ConversationRepository;
+import com.genailab.common.exception.ResourceNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -16,8 +17,6 @@ import java.util.UUID;
 /**
  * Manages conversation lifecycle — create, list, delete.
  *
- * <p>All queries are scoped to the authenticated userId.
- * A user can never see or modify another user's conversations.
  */
 @Service
 @RequiredArgsConstructor
@@ -27,7 +26,8 @@ public class ConversationService {
     private final ConversationRepository conversationRepository;
 
     @Transactional
-    public ConversationResponse createConversation(CreateConversationRequest request, UUID userId) {
+    public ConversationResponse createConversation(
+            CreateConversationRequest request, UUID userId) {
 
         Conversation conversation = Conversation.builder()
                 .userId(userId)
@@ -59,8 +59,7 @@ public class ConversationService {
     public void deleteConversation(UUID conversationId, UUID userId) {
         long deleted = conversationRepository.deleteByIdAndUserId(conversationId, userId);
         if (deleted == 0) {
-            throw new IllegalArgumentException(
-                    "Conversation not found or does not belong to user: " + conversationId);
+            throw new ResourceNotFoundException("Conversation", conversationId.toString());
         }
         log.info("Deleted conversation {} for user {}", conversationId, userId);
     }
@@ -71,8 +70,7 @@ public class ConversationService {
      */
     public Conversation findOwnedConversation(UUID conversationId, UUID userId) {
         return conversationRepository.findByIdAndUserId(conversationId, userId)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "Conversation not found: " + conversationId));
+                .orElseThrow(() -> new ResourceNotFoundException("Conversation", conversationId.toString()));
     }
 
     private ConversationResponse toResponse(Conversation c) {

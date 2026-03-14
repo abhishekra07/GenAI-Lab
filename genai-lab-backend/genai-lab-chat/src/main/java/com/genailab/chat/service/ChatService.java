@@ -1,7 +1,7 @@
 package com.genailab.chat.service;
 
 import com.genailab.ai.model.*;
-import com.genailab.ai.registry.ModelRegistry;
+import com.genailab.ai.registry.AiProviderRegistry;
 import com.genailab.chat.domain.Conversation;
 import com.genailab.chat.domain.Message;
 import com.genailab.chat.dto.MessageResponse;
@@ -48,7 +48,7 @@ public class ChatService {
     private final MessageRepository messageRepository;
     private final ConversationRepository conversationRepository;
     private final ConversationService conversationService;
-    private final ModelRegistry modelRegistry;
+    private final AiProviderRegistry aiProviderRegistry;
 
     // Virtual thread executor for SSE streaming.
     // WHY virtual threads? SSE requires a thread to stay alive for the duration
@@ -82,8 +82,7 @@ public class ChatService {
      * than enough for any AI response. The emitter is completed or errored
      * inside the async task.
      */
-    public SseEmitter streamMessage(UUID conversationId, SendMessageRequest request,
-                                    UUID userId) {
+    public SseEmitter streamMessage(UUID conversationId, SendMessageRequest request, UUID userId) {
 
         Conversation conversation = conversationService
                 .findOwnedConversation(conversationId, userId);
@@ -112,8 +111,7 @@ public class ChatService {
      * Used internally by the RAG pipeline and for simple integrations.
      */
     @Transactional
-    public MessageResponse sendMessage(UUID conversationId, SendMessageRequest request,
-                                       UUID userId) {
+    public MessageResponse sendMessage(UUID conversationId, SendMessageRequest request, UUID userId) {
 
         Conversation conversation = conversationService
                 .findOwnedConversation(conversationId, userId);
@@ -134,7 +132,7 @@ public class ChatService {
 
         // Resolve provider from model registry — currently always "openai"
         // When multiple providers exist, model configs table will drive this
-        AiChatClient client = modelRegistry.getClientForProvider("openai");
+        AiChatClient client = aiProviderRegistry.getChatClientForModel(modelId);
         AiChatResponse aiResponse = client.chat(aiRequest);
 
         Message assistantMessage = saveMessage(
@@ -168,8 +166,12 @@ public class ChatService {
      *   <li>Completes or errors the emitter</li>
      * </ol>
      */
-    private void executeStream(SseEmitter emitter, Conversation conversation,
-                               Message userMessage, String modelId, String userContent) {
+    private void executeStream(
+            SseEmitter emitter,
+            Conversation conversation,
+            Message userMessage,
+            String modelId,
+            String userContent) {
 
         StringBuilder fullResponse = new StringBuilder();
 
@@ -182,7 +184,7 @@ public class ChatService {
                     .stream(true)
                     .build();
 
-            AiChatClient client = modelRegistry.getClientForProvider("openai");
+            AiChatClient client = aiProviderRegistry.getChatClientForModel(modelId);
             Flux<AiStreamChunk> stream = client.streamChat(aiRequest);
 
             // Subscribe to the Flux and block on this virtual thread.
@@ -290,9 +292,14 @@ public class ChatService {
      * Persist a message to the database.
      */
     @Transactional
-    protected Message saveMessage(UUID conversationId, String role, String content,
-                                  Integer promptTokens, Integer completionTokens, String modelUsed,
-                                  boolean isError) {
+    protected Message saveMessage(
+            UUID conversationId,
+            String role,
+            String content,
+            Integer promptTokens,
+            Integer completionTokens,
+            String modelUsed,
+            boolean isError) {
 
         Message message = Message.builder()
                 .conversationId(conversationId)

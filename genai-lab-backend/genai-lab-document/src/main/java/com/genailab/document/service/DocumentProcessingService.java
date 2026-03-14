@@ -10,7 +10,6 @@ import com.genailab.document.repository.DocumentChunkRepository;
 import com.genailab.document.repository.DocumentRepository;
 import com.genailab.storage.service.StorageService;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -87,7 +86,6 @@ public class DocumentProcessingService {
      * even if a later step fails. We use separate transactions per stage
      * so that PROCESSING status is visible immediately.
      */
-    @Async
     public void processAsync(UUID documentId) {
         log.info("Starting async processing for document: {}", documentId);
         try {

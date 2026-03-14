@@ -1,6 +1,7 @@
 package com.genailab.ai.model.mock;
 
 import com.genailab.ai.model.*;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Flux;
 
@@ -37,6 +38,12 @@ public class MockAiChatClientImpl implements AiChatClient {
 
     private static final String PROVIDER = "mock";
     private static final Random RANDOM = new Random();
+
+    private final MeterRegistry meterRegistry;
+
+    public MockAiChatClientImpl(MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+    }
 
     // Realistic mock responses keyed by topic keywords in the user message
     private static final List<String> GENERIC_RESPONSES = List.of(
@@ -81,9 +88,21 @@ public class MockAiChatClientImpl implements AiChatClient {
         log.info("[MOCK AI] Response generated. Prompt tokens: {}, Completion tokens: {}",
                 promptTokens, completionTokens);
 
+        String modelId = request.getModelId() != null ? request.getModelId() : "mock-model";
+
+        // Record metrics — same as real providers so dashboards work uniformly
+        meterRegistry.counter("genailab.ai.requests.total",
+                "provider", PROVIDER, "model", modelId, "status", "success").increment();
+        meterRegistry.counter("genailab.ai.tokens.used",
+                        "provider", PROVIDER, "model", modelId, "type", "prompt")
+                .increment(promptTokens);
+        meterRegistry.counter("genailab.ai.tokens.used",
+                        "provider", PROVIDER, "model", modelId, "type", "completion")
+                .increment(completionTokens);
+
         return AiChatResponse.builder()
                 .content(response)
-                .modelUsed(request.getModelId() != null ? request.getModelId() : "mock-model")
+                .modelUsed(modelId)
                 .tokenUsage(AiChatResponse.TokenUsage.builder()
                         .promptTokens(promptTokens)
                         .completionTokens(completionTokens)

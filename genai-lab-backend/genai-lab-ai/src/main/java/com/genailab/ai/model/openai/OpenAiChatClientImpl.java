@@ -12,7 +12,6 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
@@ -34,7 +33,6 @@ import java.util.concurrent.atomic.AtomicReference;
  * using the {@code spring.ai.openai.*} properties in application.yml.
  * We just inject it and use it.
  */
-@Component
 @Slf4j
 public class OpenAiChatClientImpl implements AiChatClient {
 

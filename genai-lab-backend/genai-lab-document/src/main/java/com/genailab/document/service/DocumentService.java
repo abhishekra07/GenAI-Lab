@@ -5,6 +5,7 @@ import com.genailab.document.domain.DocumentStatus;
 import com.genailab.document.dto.DocumentResponse;
 import com.genailab.document.repository.DocumentChunkRepository;
 import com.genailab.document.repository.DocumentRepository;
+import com.genailab.common.exception.ResourceNotFoundException;
 import com.genailab.storage.dto.StorageResult;
 import com.genailab.storage.service.StorageService;
 import lombok.RequiredArgsConstructor;
@@ -12,8 +13,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import com.genailab.document.event.DocumentUploadedEvent;
 
 import java.util.Set;
 import java.util.UUID;
@@ -40,13 +43,23 @@ public class DocumentService {
     private final DocumentRepository documentRepository;
     private final DocumentChunkRepository documentChunkRepository;
     private final StorageService storageService;
-    private final DocumentProcessingService documentProcessingService;
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * Accept an uploaded file, persist it, and trigger async processing.
      *
-     * <p>Returns immediately after saving — processing happens in the background.
-     * The client should poll GET /documents/{id} to track processing status.
+     * <p>The processing pipeline is triggered via a Spring domain event
+     * ({@link DocumentUploadedEvent}) rather than a direct @Async call.
+     *
+     * <p>WHY events instead of a direct @Async call?
+     * Direct @Async from inside @Transactional has a race condition:
+     * the async thread starts before the transaction commits, so the document
+     * is not yet visible in the DB when the background thread queries it.
+     *
+     * <p>@TransactionalEventListener(phase = AFTER_COMMIT) in
+     * {@link com.genailab.document.event.DocumentEventListener} guarantees
+     * the event only fires after the transaction commits — no race condition,
+     * no manual synchronization code, clean and idiomatic Spring.
      */
     @Transactional
     public DocumentResponse upload(MultipartFile file, UUID userId) {
@@ -67,12 +80,13 @@ public class DocumentService {
                 .build();
 
         Document saved = documentRepository.save(document);
+
         log.info("Document uploaded: {} ({}) for user {}",
                 saved.getId(), file.getOriginalFilename(), userId);
 
-        // Trigger async processing — returns immediately
-        // Processing runs on a separate thread via @Async
-        documentProcessingService.processAsync(saved.getId());
+        // Publish event — Spring holds this until the transaction commits,
+        // then fires DocumentEventListener.onDocumentUploaded() on a new thread.
+        eventPublisher.publishEvent(new DocumentUploadedEvent(saved.getId()));
 
         return toResponse(saved);
     }
@@ -112,8 +126,7 @@ public class DocumentService {
      */
     public Document findOwnedDocument(UUID documentId, UUID userId) {
         return documentRepository.findByIdAndUserId(documentId, userId)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "Document not found: " + documentId));
+                .orElseThrow(() -> new ResourceNotFoundException("Document", documentId.toString()));
     }
 
     // =========================================================

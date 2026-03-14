@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import com.pgvector.PGvector;
 
 import java.util.List;
 import java.util.UUID;
@@ -12,45 +13,31 @@ import java.util.UUID;
 @Repository
 public interface DocumentEmbeddingRepository extends JpaRepository<DocumentEmbedding, UUID> {
 
-    /**
-     * Check if embeddings already exist for a document.
-     * Used before re-embedding to avoid duplicates.
-     */
     boolean existsByDocumentId(UUID documentId);
 
-    /**
-     * Delete all embeddings for a document.
-     * Used when reprocessing or deleting a document.
-     */
     void deleteByDocumentId(UUID documentId);
 
     /**
-     * Vector similarity search — the core of RAG retrieval.
+     * Vector similarity search using pgvector cosine distance operator.
+     * Returns chunk_id and distance score ordered by similarity.
+     */
+    /**
+     * Vector similarity search using pgvector cosine distance operator.
      *
-     * <p>Uses pgvector's cosine distance operator (<=>) to find the
-     * top-K most semantically similar chunks to the query embedding.
-     *
-     * <p>The query:
-     * - Filters by document_id (only search within this document)
-     * - Orders by cosine distance ascending (most similar = smallest distance)
-     * - Limits to top-K results
-     * - Returns chunk_id and distance score
-     *
-     * <p>cosine distance = 1 - cosine_similarity
-     * So distance 0.0 = identical, distance 2.0 = opposite
-     * We filter by distance < threshold to exclude irrelevant chunks.
+     * The queryEmbedding is passed as a PGvector object — the pgvector-java
+     * library handles the JDBC type binding correctly so no manual casting needed.
      */
     @Query(value = """
-            SELECT de.chunk_id, (de.embedding <=> CAST(:queryEmbedding AS vector)) AS distance
+            SELECT de.chunk_id, (de.embedding <=> :queryEmbedding) AS distance
             FROM document_embeddings de
             WHERE de.document_id = :documentId
-            AND (de.embedding <=> CAST(:queryEmbedding AS vector)) < :distanceThreshold
-            ORDER BY de.embedding <=> CAST(:queryEmbedding AS vector)
+            AND (de.embedding <=> :queryEmbedding) < :distanceThreshold
+            ORDER BY de.embedding <=> :queryEmbedding
             LIMIT :topK
             """, nativeQuery = true)
     List<Object[]> findSimilarChunks(
             @Param("documentId") UUID documentId,
-            @Param("queryEmbedding") String queryEmbedding,
+            @Param("queryEmbedding") PGvector queryEmbedding,
             @Param("topK") int topK,
             @Param("distanceThreshold") double distanceThreshold
     );

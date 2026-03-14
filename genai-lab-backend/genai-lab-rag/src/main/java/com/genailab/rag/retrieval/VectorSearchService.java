@@ -4,6 +4,10 @@ import com.genailab.ai.embedding.EmbeddingClient;
 import com.genailab.ai.registry.AiProviderRegistry;
 import com.genailab.ai.repository.AiModelConfigRepository;
 import com.genailab.document.domain.DocumentChunk;
+import com.pgvector.PGvector;
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.SQLException;
 import com.genailab.document.repository.DocumentChunkRepository;
 import com.genailab.rag.repository.DocumentEmbeddingRepository;
 import lombok.RequiredArgsConstructor;
@@ -11,12 +15,24 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
 /**
  * Performs semantic vector search over document embeddings.
  *
+ * <p>Given a user query and a document, finds the most semantically
+ * relevant chunks using cosine similarity in pgvector.
+ *
+ * <p>Flow:
+ * <ol>
+ *   <li>Embed the user's query using the same model used for document chunks</li>
+ *   <li>Run cosine similarity search against stored embeddings</li>
+ *   <li>Load the actual chunk text for the top-K results</li>
+ *   <li>Return ranked chunks with their similarity scores</li>
+ * </ol>
  */
 @Service
 @RequiredArgsConstructor
@@ -27,6 +43,7 @@ public class VectorSearchService {
     private final DocumentChunkRepository chunkRepository;
     private final AiProviderRegistry aiProviderRegistry;
     private final AiModelConfigRepository modelConfigRepository;
+    private final DataSource dataSource;
 
     @Value("${genailab.rag.retrieval.top-k:5}")
     private int defaultTopK;
@@ -52,17 +69,24 @@ public class VectorSearchService {
         EmbeddingClient embeddingClient = resolveEmbeddingClient(modelId);
         List<Float> queryEmbedding = embeddingClient.embed(query);
 
-        // Convert to pgvector format string: "[0.1, 0.2, 0.3, ...]"
-        String pgVectorString = toPgVectorString(queryEmbedding);
+        // Register PGvector type and create PGvector parameter for the query
+        try (Connection conn = dataSource.getConnection()) {
+            PGvector.addVectorType(conn);
+        } catch (SQLException e) {
+            throw new RuntimeException("Failed to register PGvector type", e);
+        }
+
+        float[] queryFloats = toFloatArray(queryEmbedding);
+        PGvector pgVector = new PGvector(queryFloats);
 
         // cosine distance threshold = 1 - similarity threshold
-        // similarity 0.7 -> distance 0.3
+        // similarity 0.7 → distance 0.3
         double distanceThreshold = 1.0 - similarityThreshold;
 
         // Run vector similarity search
         List<Object[]> results = embeddingRepository.findSimilarChunks(
                 documentId,
-                pgVectorString,
+                pgVector,
                 defaultTopK,
                 distanceThreshold
         );
@@ -97,28 +121,21 @@ public class VectorSearchService {
         String resolvedModelId = modelId != null ? modelId : defaultModelId;
         return modelConfigRepository.findByModelKey(resolvedModelId)
                 .map(config -> {
-                    Object embeddingModelObj = config.getCapabilities().get("embeddingModel");
-                    if (embeddingModelObj != null) {
-                        return aiProviderRegistry.getEmbeddingClientForModel(
-                                embeddingModelObj.toString());
-                    }
+                    // Use provider to look up embedding client — same logic as EmbeddingPipeline
+                    String provider = config.getProvider();
+                    EmbeddingClient client = aiProviderRegistry.getEmbeddingClientByProvider(provider);
+                    if (client != null) return client;
                     return aiProviderRegistry.getDefaultEmbeddingClient();
                 })
                 .orElseGet(() -> aiProviderRegistry.getDefaultEmbeddingClient());
     }
 
-    /**
-     * Convert a float list to pgvector string format.
-     * pgvector expects: "[0.1,0.2,0.3]"
-     */
-    private String toPgVectorString(List<Float> embedding) {
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < embedding.size(); i++) {
-            sb.append(embedding.get(i));
-            if (i < embedding.size() - 1) sb.append(",");
+    private float[] toFloatArray(List<Float> list) {
+        float[] array = new float[list.size()];
+        for (int i = 0; i < list.size(); i++) {
+            array[i] = list.get(i);
         }
-        sb.append("]");
-        return sb.toString();
+        return array;
     }
 
     /**

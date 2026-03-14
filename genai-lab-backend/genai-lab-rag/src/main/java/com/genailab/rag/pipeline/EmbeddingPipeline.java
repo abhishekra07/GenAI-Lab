@@ -5,95 +5,97 @@ import com.genailab.ai.registry.AiProviderRegistry;
 import com.genailab.ai.repository.AiModelConfigRepository;
 import com.genailab.document.domain.DocumentChunk;
 import com.genailab.document.repository.DocumentChunkRepository;
-import com.genailab.rag.domain.DocumentEmbedding;
 import com.genailab.rag.repository.DocumentEmbeddingRepository;
+import com.pgvector.PGvector;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.ArrayList;
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
 /**
  * Generates and stores vector embeddings for document chunks.
  *
- * <p>Called by DocumentProcessingService after chunks are saved.
- * For each chunk, this pipeline:
- * <ol>
- *   <li>Resolves the embedding model from the active model config</li>
- *   <li>Calls the embedding client in batches</li>
- *   <li>Converts float lists to float arrays</li>
- *   <li>Saves embeddings to document_embeddings table</li>
- * </ol>
+ * <p>Uses the pgvector-java library (PGvector class) to properly bind
+ * vector values as JDBC parameters. This is the correct, standard way
+ * to insert pgvector data from Java — no string formatting, no manual
+ * casting, no SQL injection risk.
  *
- * <p>Batching is important — embedding APIs charge per token and have
- * rate limits. Sending 50 chunks one-by-one would be 50 API calls.
- * Batching sends them all in a few calls, much more efficient.
+ * <p>The PGvector type must be registered on the PostgreSQL JDBC connection
+ * before use. We do this once via DataSource.getConnection() at startup.
  */
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class EmbeddingPipeline {
 
-    // Batch size for embedding API calls.
-    // OpenAI allows up to 2048 inputs per request — we use a
-    // conservative 20 to stay well within rate limits.
     private static final int BATCH_SIZE = 20;
-
-    // Tracks the count from the last embedDocument() call.
-    // Read by EmbeddingEventListener after pipeline completes.
-    private int lastEmbeddingCount = 0;
 
     private final DocumentChunkRepository chunkRepository;
     private final DocumentEmbeddingRepository embeddingRepository;
     private final AiProviderRegistry aiProviderRegistry;
     private final AiModelConfigRepository modelConfigRepository;
+    private final JdbcTemplate jdbcTemplate;
+    private final DataSource dataSource;
 
     @Value("${genailab.ai.default-model:gpt-4o-mini}")
     private String defaultModelId;
 
-    /**
-     * Generate embeddings for all chunks of a document.
-     *
-     * <p>Resolves the embedding model from the chat model config —
-     * e.g. gpt-4o-mini → text-embedding-3-small.
-     *
-     * @param documentId the document whose chunks need embedding
-     * @param modelId    the chat model selected for this document
-     *                   (used to resolve the associated embedding model)
-     */
+    private int lastEmbeddingCount = 0;
+
+    public EmbeddingPipeline(
+            DocumentChunkRepository chunkRepository,
+            DocumentEmbeddingRepository embeddingRepository,
+            AiProviderRegistry aiProviderRegistry,
+            AiModelConfigRepository modelConfigRepository,
+            JdbcTemplate jdbcTemplate,
+            DataSource dataSource) {
+        this.chunkRepository = chunkRepository;
+        this.embeddingRepository = embeddingRepository;
+        this.aiProviderRegistry = aiProviderRegistry;
+        this.modelConfigRepository = modelConfigRepository;
+        this.jdbcTemplate = jdbcTemplate;
+        this.dataSource = dataSource;
+    }
+
     @Transactional
     public void embedDocument(UUID documentId, String modelId) {
         log.info("Starting embedding pipeline for document: {}", documentId);
 
-        // Delete existing embeddings if re-processing
         if (embeddingRepository.existsByDocumentId(documentId)) {
             log.info("Removing existing embeddings for document: {}", documentId);
             embeddingRepository.deleteByDocumentId(documentId);
         }
 
-        // Resolve the embedding model from the model config
         String resolvedModelId = modelId != null ? modelId : defaultModelId;
         EmbeddingClient embeddingClient = resolveEmbeddingClient(resolvedModelId);
         String embeddingModelName = embeddingClient.getModelName();
 
-        // Load all chunks for this document
         List<DocumentChunk> chunks = chunkRepository
                 .findByDocumentIdOrderByChunkIndexAsc(documentId);
 
         if (chunks.isEmpty()) {
             log.warn("No chunks found for document: {} — skipping embedding", documentId);
+            lastEmbeddingCount = 0;
             return;
         }
 
         log.info("Embedding {} chunks for document {} using model: {}",
                 chunks.size(), documentId, embeddingModelName);
 
-        // Process in batches
-        List<DocumentEmbedding> allEmbeddings = new ArrayList<>();
+        // Register PGvector type on a connection — required once per DataSource
+        // so PostgreSQL JDBC driver knows how to handle the vector type
+        registerPgVectorType();
+
+        int totalInserted = 0;
         int totalBatches = (int) Math.ceil((double) chunks.size() / BATCH_SIZE);
 
         for (int batchNum = 0; batchNum < totalBatches; batchNum++) {
@@ -104,37 +106,42 @@ public class EmbeddingPipeline {
             log.debug("Processing batch {}/{} ({} chunks)",
                     batchNum + 1, totalBatches, batch.size());
 
-            // Extract text content from chunks for embedding
             List<String> texts = batch.stream()
                     .map(DocumentChunk::getContent)
                     .toList();
 
-            // Call embedding API — one API call for the whole batch
             List<List<Float>> batchEmbeddings = embeddingClient.embedAll(texts);
 
-            // Convert to DocumentEmbedding entities
             for (int i = 0; i < batch.size(); i++) {
                 DocumentChunk chunk = batch.get(i);
-                List<Float> embeddingVector = batchEmbeddings.get(i);
+                List<Float> embeddingValues = batchEmbeddings.get(i);
 
-                allEmbeddings.add(DocumentEmbedding.builder()
-                        .chunkId(chunk.getId())
-                        .documentId(documentId)
-                        .embedding(toFloatArray(embeddingVector))
-                        .embeddingModel(embeddingModelName)
-                        .build());
+                // PGvector handles all type conversion internally.
+                // The PostgreSQL JDBC driver knows exactly how to bind this.
+                PGvector pgVector = new PGvector(toFloatArray(embeddingValues));
+
+                // Use Timestamp.from(Instant) — JDBC does not know how to
+                // bind java.time.Instant directly; it needs java.sql.Timestamp.
+                // UUID is handled natively by the PostgreSQL JDBC driver.
+                jdbcTemplate.update(
+                        "INSERT INTO document_embeddings " +
+                                "(id, chunk_id, document_id, embedding, embedding_model, created_at) " +
+                                "VALUES (gen_random_uuid(), ?, ?, ?, ?, ?)",
+                        chunk.getId(),
+                        documentId,
+                        pgVector,
+                        embeddingModelName,
+                        Timestamp.from(Instant.now())
+                );
+                totalInserted++;
             }
         }
 
-        // Save all embeddings in one batch
-        embeddingRepository.saveAll(allEmbeddings);
-        lastEmbeddingCount = allEmbeddings.size();
-
+        lastEmbeddingCount = totalInserted;
         log.info("Embedding complete for document {}: {} embeddings saved",
-                documentId, allEmbeddings.size());
+                documentId, totalInserted);
     }
 
-    /** Returns the embedding count from the most recent embedDocument() call. */
     public int getLastEmbeddingCount() {
         return lastEmbeddingCount;
     }
@@ -144,32 +151,37 @@ public class EmbeddingPipeline {
     // =========================================================
 
     /**
-     * Resolve the embedding client from the chat model config.
+     * Register PGvector with the PostgreSQL JDBC connection.
      *
-     * <p>Looks up the model in ai_model_configs, reads the
-     * embeddingModel from capabilities JSONB, then gets the
-     * matching EmbeddingClient from the registry.
+     * <p>This is required by the pgvector-java library before any
+     * vector values can be bound as JDBC parameters. Without this,
+     * the driver doesn't know how to serialize/deserialize the vector type.
      *
-     * <p>Falls back to the default model if the specified model
-     * has no embeddingModel capability configured.
+     * <p>We call this once before batch processing. The registration
+     * is connection-scoped — HikariCP manages connection pooling so
+     * we use a dedicated connection just for registration.
      */
+    private void registerPgVectorType() {
+        try (Connection conn = dataSource.getConnection()) {
+            PGvector.addVectorType(conn);
+        } catch (SQLException e) {
+            throw new RuntimeException("Failed to register PGvector type", e);
+        }
+    }
+
     private EmbeddingClient resolveEmbeddingClient(String modelId) {
         return modelConfigRepository.findByModelKey(modelId)
                 .map(config -> {
-                    Object embeddingModelObj = config.getCapabilities().get("embeddingModel");
-                    if (embeddingModelObj != null) {
-                        String embeddingModel = embeddingModelObj.toString();
-                        log.debug("Resolved embedding model: {} for chat model: {}",
-                                embeddingModel, modelId);
-                        return aiProviderRegistry.getEmbeddingClientForModel(embeddingModel);
-                    }
-                    log.warn("No embeddingModel capability found for model: {} — using default",
-                            modelId);
+                    String provider = config.getProvider();
+                    log.debug("Resolving embedding client for chat model: {} via provider: {}",
+                            modelId, provider);
+                    EmbeddingClient client = aiProviderRegistry.getEmbeddingClientByProvider(provider);
+                    if (client != null) return client;
+                    log.warn("No embedding client for provider: {} — using default", provider);
                     return aiProviderRegistry.getDefaultEmbeddingClient();
                 })
                 .orElseGet(() -> {
-                    log.warn("Model config not found for: {} — using default embedding client",
-                            modelId);
+                    log.warn("Model config not found for: {} — using default", modelId);
                     return aiProviderRegistry.getDefaultEmbeddingClient();
                 });
     }

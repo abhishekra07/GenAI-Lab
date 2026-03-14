@@ -26,6 +26,16 @@
 
         <dependency>
             <groupId>com.genailab</groupId>
+            <artifactId>genai-lab-metrics</artifactId>
+        </dependency>
+
+        <!--
+            Internal: Storage abstraction
+            Document module stores uploaded files via StorageService.
+            It never knows if files go to local disk or MinIO — the abstraction handles it.
+        -->
+        <dependency>
+            <groupId>com.genailab</groupId>
             <artifactId>genai-lab-storage</artifactId>
         </dependency>
 
@@ -44,11 +54,21 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!--
+            Apache PDFBox — PDF text extraction
+            Used by PdfTextExtractor to extract raw text from PDF files.
+            Only this module imports PDFBox — text extraction is encapsulated here.
+        -->
         <dependency>
             <groupId>org.apache.pdfbox</groupId>
             <artifactId>pdfbox</artifactId>
         </dependency>
 
+        <!--
+            Apache POI — DOCX text extraction
+            Used by DocxTextExtractor to extract text from Word documents.
+            poi-ooxml handles Open XML format (.docx, .xlsx, .pptx).
+        -->
         <dependency>
             <groupId>org.apache.poi</groupId>
             <artifactId>poi-ooxml</artifactId>

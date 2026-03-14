@@ -67,6 +67,14 @@ genailab:
     queue-capacity: 20
     thread-name-prefix: genailab-async-dev-
 
+  rag:
+    chunking:
+      chunk-size: 512       # tokens per chunk (approx 4 chars/token = ~2048 chars)
+      chunk-overlap: 50     # overlap between consecutive chunks
+    retrieval:
+      top-k: 5              # number of chunks retrieved per query
+      similarity-threshold: 0.1  # minimum cosine similarity score
+
 # ============================================================
 # LOGGING — more verbose in dev
 # ============================================================

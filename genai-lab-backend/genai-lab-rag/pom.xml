@@ -26,9 +26,24 @@
 
         <dependency>
             <groupId>com.genailab</groupId>
+            <artifactId>genai-lab-metrics</artifactId>
+        </dependency>
+
+        <!--
+            Internal: AI abstraction
+            RAG uses EmbeddingClient to generate embeddings for chunks and queries.
+            Uses AiChatClient to generate answers from retrieved context.
+        -->
+        <dependency>
+            <groupId>com.genailab</groupId>
             <artifactId>genai-lab-ai</artifactId>
         </dependency>
 
+        <!--
+            Internal: Document module
+            RAG needs access to document chunks (the text we embed and search).
+            It reads chunks from the document module's repository.
+        -->
         <dependency>
             <groupId>com.genailab</groupId>
             <artifactId>genai-lab-document</artifactId>
@@ -49,11 +64,26 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!--
+            pgvector Java client
+            Allows us to work with the vector(1536) PostgreSQL type from Java.
+            Provides PGvector class that maps to pgvector's vector column type.
+            Used in the DocumentEmbedding entity and vector search queries.
+        -->
         <dependency>
             <groupId>com.pgvector</groupId>
             <artifactId>pgvector</artifactId>
         </dependency>
 
+        <!--
+            Spring JDBC
+            We use JdbcTemplate for vector similarity search queries.
+            WHY not JPA for this?
+            pgvector's cosine similarity operator (<=> in SQL) is not
+            part of standard JPQL. JPA cannot express:
+              ORDER BY embedding <=> '[0.1, 0.2, ...]'::vector
+            We need raw SQL for vector operations, so JDBC is more appropriate here.
+        -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-jdbc</artifactId>

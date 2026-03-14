@@ -5,6 +5,7 @@ import com.genailab.ai.registry.AiProviderRegistry;
 import com.genailab.ai.repository.AiModelConfigRepository;
 import com.genailab.document.domain.DocumentChunk;
 import com.genailab.document.repository.DocumentChunkRepository;
+import com.genailab.metrics.AiMetrics;
 import com.genailab.rag.repository.DocumentEmbeddingRepository;
 import com.pgvector.PGvector;
 import lombok.RequiredArgsConstructor;
@@ -14,9 +15,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import javax.sql.DataSource;
-import java.sql.Connection;
-import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
@@ -44,7 +42,7 @@ public class EmbeddingPipeline {
     private final AiProviderRegistry aiProviderRegistry;
     private final AiModelConfigRepository modelConfigRepository;
     private final JdbcTemplate jdbcTemplate;
-    private final DataSource dataSource;
+    private final AiMetrics aiMetrics;
 
     @Value("${genailab.ai.default-model:gpt-4o-mini}")
     private String defaultModelId;
@@ -57,13 +55,13 @@ public class EmbeddingPipeline {
             AiProviderRegistry aiProviderRegistry,
             AiModelConfigRepository modelConfigRepository,
             JdbcTemplate jdbcTemplate,
-            DataSource dataSource) {
+            AiMetrics aiMetrics) {
         this.chunkRepository = chunkRepository;
         this.embeddingRepository = embeddingRepository;
         this.aiProviderRegistry = aiProviderRegistry;
         this.modelConfigRepository = modelConfigRepository;
         this.jdbcTemplate = jdbcTemplate;
-        this.dataSource = dataSource;
+        this.aiMetrics = aiMetrics;
     }
 
     @Transactional
@@ -90,10 +88,6 @@ public class EmbeddingPipeline {
 
         log.info("Embedding {} chunks for document {} using model: {}",
                 chunks.size(), documentId, embeddingModelName);
-
-        // Register PGvector type on a connection — required once per DataSource
-        // so PostgreSQL JDBC driver knows how to handle the vector type
-        registerPgVectorType();
 
         int totalInserted = 0;
         int totalBatches = (int) Math.ceil((double) chunks.size() / BATCH_SIZE);
@@ -138,6 +132,7 @@ public class EmbeddingPipeline {
         }
 
         lastEmbeddingCount = totalInserted;
+        aiMetrics.recordEmbeddingsGenerated(resolvedModelId, embeddingModelName, totalInserted);
         log.info("Embedding complete for document {}: {} embeddings saved",
                 documentId, totalInserted);
     }
@@ -149,25 +144,6 @@ public class EmbeddingPipeline {
     // =========================================================
     // Private helpers
     // =========================================================
-
-    /**
-     * Register PGvector with the PostgreSQL JDBC connection.
-     *
-     * <p>This is required by the pgvector-java library before any
-     * vector values can be bound as JDBC parameters. Without this,
-     * the driver doesn't know how to serialize/deserialize the vector type.
-     *
-     * <p>We call this once before batch processing. The registration
-     * is connection-scoped — HikariCP manages connection pooling so
-     * we use a dedicated connection just for registration.
-     */
-    private void registerPgVectorType() {
-        try (Connection conn = dataSource.getConnection()) {
-            PGvector.addVectorType(conn);
-        } catch (SQLException e) {
-            throw new RuntimeException("Failed to register PGvector type", e);
-        }
-    }
 
     private EmbeddingClient resolveEmbeddingClient(String modelId) {
         return modelConfigRepository.findByModelKey(modelId)

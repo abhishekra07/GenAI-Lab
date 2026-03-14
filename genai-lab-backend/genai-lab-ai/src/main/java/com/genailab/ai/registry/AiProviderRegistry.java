@@ -12,7 +12,7 @@ import com.genailab.ai.repository.AiModelConfigRepository;
 import com.genailab.common.exception.ModelNotFoundException;
 import com.genailab.common.exception.ModelNotAvailableException;
 import com.genailab.common.exception.ProviderNotAvailableException;
-import io.micrometer.core.instrument.MeterRegistry;
+import com.genailab.metrics.AiMetrics;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
@@ -52,7 +52,7 @@ public class AiProviderRegistry {
 
     private final AiProviderProperties properties;
     private final AiModelConfigRepository modelConfigRepository;
-    private final MeterRegistry meterRegistry;
+    private final AiMetrics aiMetrics;
 
     // Spring AI auto-configured beans — may be null if starter not on classpath
     // We use @Autowired(required=false) so startup doesn't fail if unavailable
@@ -69,10 +69,10 @@ public class AiProviderRegistry {
     public AiProviderRegistry(
             AiProviderProperties properties,
             AiModelConfigRepository modelConfigRepository,
-            MeterRegistry meterRegistry) {
+            AiMetrics aiMetrics) {
         this.properties = properties;
         this.modelConfigRepository = modelConfigRepository;
-        this.meterRegistry = meterRegistry;
+        this.aiMetrics = aiMetrics;
     }
 
     @PostConstruct
@@ -175,7 +175,7 @@ public class AiProviderRegistry {
         // Always safe to initialise — no external dependencies
         AiProviderProperties.ProviderConfig mockConfig = providers.get("mock");
         if (mockConfig != null && mockConfig.isEnabled()) {
-            chatClients.put("mock", new MockAiChatClientImpl(meterRegistry));
+            chatClients.put("mock", new MockAiChatClientImpl(aiMetrics));
             log.info("  ✓ Mock AI provider registered");
         }
 
@@ -188,7 +188,7 @@ public class AiProviderRegistry {
                 log.warn("  ✗ OpenAI skipped — Spring AI ChatModel bean not available");
             } else {
                 chatClients.put("openai",
-                        new OpenAiChatClientImpl(springAiChatModel, meterRegistry));
+                        new OpenAiChatClientImpl(springAiChatModel, aiMetrics));
                 log.info("  ✓ OpenAI provider registered");
             }
         }

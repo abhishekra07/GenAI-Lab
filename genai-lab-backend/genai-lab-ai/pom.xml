@@ -25,21 +25,51 @@
             <artifactId>genai-lab-common</artifactId>
         </dependency>
 
-        <!-- Spring Data JPA — for Conversation and Message entities -->
+        <dependency>
+            <groupId>com.genailab</groupId>
+            <artifactId>genai-lab-metrics</artifactId>
+        </dependency>
+
+        <!--
+            Spring AI — OpenAI Integration
+            This is the ONLY module that has a direct Spring AI / OpenAI dependency.
+            All other modules communicate with AI through our abstraction interfaces.
+
+            IMPORTANT — artifact name changed at Spring AI 1.0.0 GA:
+              OLD (milestones only): spring-ai-openai-spring-boot-starter
+              NEW (1.0.0 GA+):       spring-ai-starter-model-openai
+
+            spring-ai-starter-model-openai brings:
+            - OpenAI ChatClient (for chat completions)
+            - OpenAI EmbeddingClient (for text embeddings)
+            - Auto-configuration (reads spring.ai.openai.api-key from config)
+            - Streaming support via Reactor (Flux-based streaming)
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-openai</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>
         </dependency>
 
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-model-openai</artifactId>
-        </dependency>
+        <!--
+            Spring Boot Web
+            Needed because our AI service exposes reactive streaming types
+            and needs the web context for SSE support.
+        -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
+        <!--
+            Spring Boot Actuator
+            Enables Micrometer metrics. The AI module will instrument
+            every AI call with latency, token counts, and error metrics.
+        -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>

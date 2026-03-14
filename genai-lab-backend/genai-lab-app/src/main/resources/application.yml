@@ -70,19 +70,18 @@ spring:
   # SPRING AI — OpenAI Provider
   # ============================
   ai:
+    default-model: ${AI_DEFAULT_MODEL:gpt-4o-mini} #mock gpt-4o-mini
+    mock:
+      enabled: true
     openai:
-      # Loaded from environment variable — never hardcode API keys
-      api-key: ${OPENAI_API_KEY:}
-      chat:
-        options:
-          model: gpt-4o-mini
-          temperature: 0.7
-          max-tokens: 2048
-      embedding:
-        options:
-          # text-embedding-3-small produces 1536-dimension vectors.
-          # This is why our pgvector column is defined as vector(1536).
-          model: text-embedding-3-small
+      enabled: true
+      api-key: ${OPENAI_API_KEY}
+      chat-model: gpt-4o-mini
+      embedding-model: text-embedding-3-small
+    anthropic:
+      enabled: false                        # flip to true when ready
+      api-key: ${ANTHROPIC_API_KEY:}
+      chat-model: claude-3-5-sonnet-20241022
 
 # ============================
 # GENAI LAB CUSTOM PROPERTIES

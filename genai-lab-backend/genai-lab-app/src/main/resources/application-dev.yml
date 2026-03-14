@@ -17,8 +17,18 @@ spring:
         show_sql: true
         format_sql: true
   ai:
+    default-model: ${AI_DEFAULT_MODEL:gpt-4o-mini} #mock gpt-4o-mini
+    mock:
+      enabled: false
     openai:
+      enabled: true
       api-key: ${OPENAI_API_KEY}
+      chat-model: gpt-4o-mini
+      embedding-model: text-embedding-3-small
+    anthropic:
+      enabled: false                        # flip to true when ready
+      api-key: ${ANTHROPIC_API_KEY:}
+      chat-model: claude-3-5-sonnet-20241022
 genailab:
   storage:
     provider: minio

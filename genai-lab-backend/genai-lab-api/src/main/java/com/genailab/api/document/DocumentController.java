@@ -45,8 +45,7 @@ public class DocumentController {
      *   -F "file=@/path/to/document.pdf"
      */
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<DocumentResponse> upload(
-            @RequestParam("file") MultipartFile file,
+    public ResponseEntity<DocumentResponse> upload(@RequestParam("file") MultipartFile file,
             @AuthenticationPrincipal User user) {
 
         log.info("Document upload request from user {}: {}",

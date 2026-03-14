@@ -3,15 +3,18 @@ package com.genailab.api.exception;
 import com.genailab.common.exception.*;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
-import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.time.Instant;
 import java.util.stream.Collectors;
@@ -20,10 +23,32 @@ import java.util.stream.Collectors;
  * Global exception handler — intercepts all exceptions thrown from
  * any controller and maps them to consistent {@link ApiErrorResponse} shapes.
  *
+ * <p>WHY centralise exception handling here?
+ * Without this, Spring returns its own default error format which:
+ * <ul>
+ *   <li>Leaks stack traces in some configurations</li>
+ *   <li>Has inconsistent structure across different error types</li>
+ *   <li>Does not include our machine-readable error codes</li>
+ * </ul>
+ *
+ * <p>With @RestControllerAdvice every exception from every controller
+ * flows through here before reaching the client. One place to:
+ * <ul>
+ *   <li>Control exactly what the frontend sees</li>
+ *   <li>Log at the right level (warn vs error)</li>
+ *   <li>Never leak internal details (stack traces, DB errors)</li>
+ * </ul>
+ *
+ * <p>Handler priority — Spring picks the most specific handler:
+ * specific exceptions are caught before the generic fallback at the bottom.
  */
 @RestControllerAdvice
 @Slf4j
-public class GlobalExceptionHandler {
+public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
+
+    // =========================================================
+    // AI exceptions
+    // =========================================================
 
     @ExceptionHandler(ModelNotFoundException.class)
     public ResponseEntity<ApiErrorResponse> handleModelNotFound(
@@ -109,36 +134,65 @@ public class GlobalExceptionHandler {
 
     /**
      * Handles @Valid annotation failures on request bodies.
-     * Collects ALL field errors into one readable message.
-     *
-     * Example response message:
-     * "Validation failed: email must be a valid email address; password must be between 8 and 100 characters"
+     * Overrides ResponseEntityExceptionHandler to use our ApiErrorResponse format.
      */
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ApiErrorResponse> handleValidation(
-            MethodArgumentNotValidException ex, HttpServletRequest request) {
+    @Override
+    protected ResponseEntity<Object> handleMethodArgumentNotValid(
+            MethodArgumentNotValidException ex,
+            HttpHeaders headers,
+            HttpStatusCode status,
+            WebRequest request) {
 
         String message = ex.getBindingResult().getFieldErrors().stream()
                 .map(FieldError::getDefaultMessage)
                 .collect(Collectors.joining("; "));
 
-        log.warn("Validation failed for {}: {}", request.getRequestURI(), message);
-        return build(HttpStatus.BAD_REQUEST,
-                "Validation failed: " + message, "VALIDATION_ERROR", request);
+        log.warn("Validation failed: {}", message);
+
+        ApiErrorResponse body = ApiErrorResponse.builder()
+                .status(HttpStatus.BAD_REQUEST.value())
+                .error(HttpStatus.BAD_REQUEST.getReasonPhrase())
+                .message("Validation failed: " + message)
+                .code("VALIDATION_ERROR")
+                .timestamp(java.time.Instant.now())
+                .build();
+
+        return ResponseEntity.badRequest().body(body);
     }
 
     /**
-     * Handles file uploads that exceed the configured max size.
-     * spring.servlet.multipart.max-file-size in application.yml.
+     * Handles unsupported content type.
+     * Overrides ResponseEntityExceptionHandler to log detailed info
+     * and return our standard ApiErrorResponse format.
      */
-    @ExceptionHandler(MaxUploadSizeExceededException.class)
-    public ResponseEntity<ApiErrorResponse> handleFileTooLarge(
-            MaxUploadSizeExceededException ex, HttpServletRequest request) {
+    @Override
+    protected ResponseEntity<Object> handleHttpMediaTypeNotSupported(
+            org.springframework.web.HttpMediaTypeNotSupportedException ex,
+            HttpHeaders headers,
+            HttpStatusCode status,
+            WebRequest request) {
 
-        log.warn("File upload too large: {}", ex.getMessage());
-        return build(HttpStatus.PAYLOAD_TOO_LARGE,
-                "File exceeds the maximum allowed size of 50MB.",
-                "FILE_TOO_LARGE", request);
+        String requestUri = ((jakarta.servlet.http.HttpServletRequest)
+                ((org.springframework.web.context.request.ServletWebRequest) request)
+                        .getNativeRequest()).getRequestURI();
+        String contentType = ((jakarta.servlet.http.HttpServletRequest)
+                ((org.springframework.web.context.request.ServletWebRequest) request)
+                        .getNativeRequest()).getContentType();
+
+        log.error("Unsupported Content-Type on {}: received=[{}], supported={}",
+                requestUri, contentType, ex.getSupportedMediaTypes());
+
+        ApiErrorResponse body = ApiErrorResponse.builder()
+                .status(HttpStatus.UNSUPPORTED_MEDIA_TYPE.value())
+                .error(HttpStatus.UNSUPPORTED_MEDIA_TYPE.getReasonPhrase())
+                .message("Content-Type '" + contentType + "' is not supported. " +
+                        "For file uploads use multipart/form-data.")
+                .code("UNSUPPORTED_MEDIA_TYPE")
+                .path(requestUri)
+                .timestamp(java.time.Instant.now())
+                .build();
+
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE).body(body);
     }
 
     // =========================================================

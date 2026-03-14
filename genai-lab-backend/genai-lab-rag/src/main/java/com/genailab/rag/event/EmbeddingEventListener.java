@@ -6,10 +6,9 @@ import com.genailab.rag.pipeline.EmbeddingPipeline;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.event.TransactionPhase;
-import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
  * Listens for chunk-ready events from the document module and
@@ -35,7 +34,7 @@ public class EmbeddingEventListener {
      * are visible when the embedding pipeline queries them.
      */
     @Async
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @EventListener
     public void onChunksReady(ChunksReadyEvent event) {
         log.info("Chunks ready event received for document: {} — starting embedding",
                 event.documentId());

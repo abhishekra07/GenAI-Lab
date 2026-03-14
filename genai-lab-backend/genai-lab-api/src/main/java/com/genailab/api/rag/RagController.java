@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/v1/documents")
+@RequestMapping("/api/v1/rag/documents")
 @RequiredArgsConstructor
 @Slf4j
 public class RagController {

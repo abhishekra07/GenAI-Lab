@@ -140,6 +140,32 @@ services:
     networks:
       - genailab-network
 
+  # GRAFANA — Metrics Visualisation
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: genailab-grafana
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      # Auto-provision Prometheus datasource on first start
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/api/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - genailab-network
+
   # ==========================================================
   # SPRING BOOT APPLICATION
   # ==========================================================
@@ -222,6 +248,8 @@ volumes:
     name: genailab_minio_data
   prometheus_data:
     name: genailab_prometheus_data
+  grafana_data:
+    name: genailab_grafana_data
 
 # ==========================================================
 # NETWORKS — Container communication

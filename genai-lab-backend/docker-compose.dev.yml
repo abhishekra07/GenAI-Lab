@@ -17,6 +17,11 @@ services:
     volumes:
       - ./docker/prometheus/prometheus.dev.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
+  grafana:
+    environment:
+      # Useful during dev — skip login prompt
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
 
 volumes:
   prometheus_data:

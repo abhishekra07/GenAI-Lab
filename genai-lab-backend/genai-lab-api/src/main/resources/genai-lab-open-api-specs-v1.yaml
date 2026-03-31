@@ -1,0 +1,1338 @@
+openapi: 3.0.3
+
+info:
+  title: GenAI Lab API
+  version: 1.0.0
+  description: |
+    ## Overview
+    GenAI Lab is an AI-powered platform with two core features:
+    - **AI Chat** — conversational chat with streaming responses via Server-Sent Events (SSE)
+    - **Document Analyzer** — upload documents and ask questions about them using RAG (Retrieval Augmented Generation)
+
+    ## Base URL
+    ```
+    http://localhost:8080
+    ```
+
+    ## Authentication
+    All endpoints except `/api/v1/auth/**` and `GET /api/v1/models` require a JWT Bearer token.
+
+    ### Token Lifecycle
+    - **Access token** — short-lived JWT (15 min in production, 24h in dev). Send in every request header.
+    - **Refresh token** — long-lived opaque string (7 days), stored in DB. Use to get a new access token when the current one expires.
+    - **Token rotation** — every `/auth/refresh` call invalidates the old refresh token and issues a new one. Always store the latest refresh token.
+
+    ### How to authenticate
+    1. Call `POST /api/v1/auth/login` → get `accessToken` + `refreshToken`
+    2. Add `Authorization: Bearer {accessToken}` header to every request
+    3. When you get a `401 Unauthorized`, call `POST /api/v1/auth/refresh` with the refresh token
+    4. Store the new `accessToken` and `refreshToken` from the refresh response
+    5. On logout, call `POST /api/v1/auth/logout` to invalidate the refresh token
+
+    ## Error Format
+    All errors follow this consistent shape:
+    ```json
+    {
+      "status": 400,
+      "error": "Bad Request",
+      "message": "Human-readable description of what went wrong",
+      "code": "MACHINE_READABLE_CODE",
+      "path": "/api/v1/...",
+      "timestamp": "2026-03-14T12:00:00Z"
+    }
+    ```
+
+    ### Common Error Codes
+    | HTTP Status | Code | Meaning |
+    |---|---|---|
+    | 400 | `VALIDATION_ERROR` | Request body failed validation |
+    | 400 | `MODEL_NOT_FOUND` | The specified modelId does not exist |
+    | 401 | `UNAUTHORIZED` | Missing or invalid access token |
+    | 403 | `FORBIDDEN` | Token valid but insufficient permissions |
+    | 404 | `RESOURCE_NOT_FOUND` | Resource doesn't exist or doesn't belong to you |
+    | 415 | `UNSUPPORTED_MEDIA_TYPE` | Wrong Content-Type for file upload |
+    | 429 | `RATE_LIMIT_EXCEEDED` | AI provider rate limit hit |
+    | 500 | `INTERNAL_ERROR` | Unexpected server error |
+    | 502 | `PROVIDER_ERROR` | AI provider returned an error |
+    | 503 | `MODEL_NOT_AVAILABLE` | Model is disabled in configuration |
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+security:
+  - BearerAuth: []
+
+# ═══════════════════════════════════════════════════════════════
+# PATHS
+# ═══════════════════════════════════════════════════════════════
+
+paths:
+
+  # ─────────────────────────────────────────
+  # AUTH
+  # ─────────────────────────────────────────
+
+  /api/v1/auth/register:
+    post:
+      summary: Register a new account
+      description: |
+        Creates a new user account and returns tokens immediately.
+        No email verification required.
+      operationId: register
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              email: user@example.com
+              password: securePassword123
+              fullName: John Doe
+      responses:
+        '201':
+          description: Account created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Validation error or email already taken.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                emailTaken:
+                  value:
+                    status: 400
+                    error: Bad Request
+                    message: "Email already registered: user@example.com"
+                    code: VALIDATION_ERROR
+
+  /api/v1/auth/login:
+    post:
+      summary: Login with email and password
+      description: |
+        Authenticates the user and returns access + refresh tokens.
+
+        **Store both tokens:**
+        - `accessToken` → add to every API request header
+        - `refreshToken` → store securely, use when access token expires
+      operationId: login
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: user@example.com
+              password: securePassword123
+      responses:
+        '200':
+          description: Login successful.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/refresh:
+    post:
+      summary: Refresh access token
+      description: |
+        Exchange a refresh token for a new access token and a new refresh token.
+
+        **Critical — Token Rotation:**
+        - The refresh token you send is **immediately invalidated**
+        - A **new refresh token** is returned — you MUST store it
+        - Using the old refresh token again will trigger security revocation of ALL sessions
+
+        **When to call this:**
+        - When any API call returns `401 Unauthorized`
+        - NOT proactively — only when the access token has expired
+
+        **Frontend flow:**
+        ```
+        API call → 401 response
+        → call POST /auth/refresh with stored refreshToken
+        → store new accessToken and new refreshToken
+        → retry the original API call
+        ```
+      operationId: refreshToken
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: New tokens issued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Invalid, expired, or already-used refresh token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                status: 400
+                error: Bad Request
+                message: "Refresh token has expired. Please log in again."
+                code: VALIDATION_ERROR
+
+  /api/v1/auth/logout:
+    post:
+      summary: Logout — revoke refresh token
+      description: |
+        Revokes the refresh token so it can no longer be used to obtain new access tokens.
+
+        **Note:** The current access token remains valid until it naturally expires
+        (max 15 minutes in production). This is by design — invalidating JWTs
+        requires a blocklist which adds complexity. The 15-minute window is acceptable.
+
+        **Frontend should:**
+        1. Call this endpoint with the stored refresh token
+        2. Delete both tokens from storage immediately
+        3. Redirect to login page
+      operationId: logout
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+                  example: dGhpcyBpcyBhIHNhbXBsZSByZWZyZXNoIHRva2Vu
+      responses:
+        '200':
+          description: Logged out successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Logged out successfully
+
+  # ─────────────────────────────────────────
+  # MODELS
+  # ─────────────────────────────────────────
+
+  /api/v1/models:
+    get:
+      summary: List available AI models
+      description: |
+        Returns all active AI models with their availability status.
+
+        Use this to populate model selector dropdowns in the UI.
+
+        **`available` field:** If `false`, the model's provider API key is not
+        configured — show the model as disabled/greyed out, not hidden.
+
+        **`modelKey` field:** This is the value to send in `modelId` fields
+        throughout the API (conversations, document uploads, RAG queries).
+
+        This endpoint is **public** — no authentication required.
+      operationId: listModels
+      tags: [Models]
+      security: []
+      responses:
+        '200':
+          description: List of models.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ModelResponse'
+              example:
+                - modelKey: gpt-4o-mini
+                  displayName: GPT-4o Mini
+                  provider: openai
+                  contextWindow: 128000
+                  isDefault: true
+                  available: true
+                  capabilities:
+                    embeddingModel: text-embedding-3-small
+                    embeddingDimensions: 1536
+                - modelKey: mock
+                  displayName: Mock AI (Development Only)
+                  provider: mock
+                  contextWindow: 4096
+                  isDefault: false
+                  available: true
+
+  # ─────────────────────────────────────────
+  # CONVERSATIONS
+  # ─────────────────────────────────────────
+
+  /api/v1/conversations:
+    post:
+      summary: Create a conversation
+      description: |
+        Creates a new conversation with a specified AI model.
+
+        The `modelId` sets the default model for all messages in this conversation.
+        Individual messages can override this with their own `modelId`.
+      operationId: createConversation
+      tags: [Chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateConversationRequest'
+            example:
+              modelId: gpt-4o-mini
+              title: My first conversation
+              systemPrompt: You are a helpful coding assistant.
+      responses:
+        '201':
+          description: Conversation created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationResponse'
+        '400':
+          description: Validation error or invalid modelId.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    get:
+      summary: List conversations
+      description: |
+        Returns paginated list of the authenticated user's conversations,
+        ordered by most recent message first.
+      operationId: listConversations
+      tags: [Chat]
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+          description: Page number (0-based).
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+          description: Page size.
+      responses:
+        '200':
+          description: Paginated list of conversations.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMetadata'
+                  - type: object
+                    properties:
+                      content:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ConversationResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/conversations/{conversationId}:
+    get:
+      summary: Get a conversation
+      operationId: getConversation
+      tags: [Chat]
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      responses:
+        '200':
+          description: Conversation details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      summary: Delete a conversation
+      description: Permanently deletes the conversation and all its messages.
+      operationId: deleteConversation
+      tags: [Chat]
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      responses:
+        '204':
+          description: Deleted successfully.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/conversations/{conversationId}/messages:
+    get:
+      summary: Get all messages in a conversation
+      description: Returns all messages in chronological order (oldest first).
+      operationId: getMessages
+      tags: [Chat]
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      responses:
+        '200':
+          description: List of messages.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MessageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    post:
+      summary: Send a message (non-streaming)
+      description: |
+        Send a message and receive the complete AI response in one HTTP response.
+
+        Use this when SSE/streaming is not available or not needed.
+        For real-time streaming (recommended for chat UI), use the streaming endpoint instead.
+      operationId: sendMessage
+      tags: [Chat]
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendMessageRequest'
+            example:
+              content: What is the capital of France?
+      responses:
+        '201':
+          description: Message sent and AI response received.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          description: AI provider error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/conversations/{conversationId}/messages/stream:
+    post:
+      summary: Send a message (streaming via SSE)
+      description: |
+        Send a message and receive the AI response as a real-time stream
+        using Server-Sent Events (SSE).
+
+        **This is the recommended endpoint for chat UI** — it shows the AI
+        typing word by word rather than waiting for the full response.
+
+        **How to consume SSE in JavaScript:**
+        ```javascript
+        const response = await fetch(
+          `/api/v1/conversations/${conversationId}/messages/stream`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ content: userMessage })
+          }
+        );
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let fullResponse = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop(); // keep incomplete line
+
+          for (const line of lines) {
+            if (line.startsWith('data:')) {
+              const data = line.slice(5).trim();
+              if (!data) continue;
+
+              const chunk = JSON.parse(data);
+              if (chunk.done) break; // stream complete
+
+              fullResponse += chunk.content;
+              // Update UI with fullResponse or append chunk.content
+            }
+          }
+        }
+        ```
+
+        **SSE Event Format:**
+        ```
+        event: chunk
+        data: {"content":"Hello"}
+
+        event: chunk
+        data: {"content":", how can"}
+
+        event: chunk
+        data: {"content":" I help?"}
+
+        event: done
+        data: {"content":"[DONE]","done":true}
+        ```
+      operationId: streamMessage
+      tags: [Chat]
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendMessageRequest'
+            example:
+              content: Explain how neural networks work
+              modelId: gpt-4o-mini
+      responses:
+        '200':
+          description: SSE stream of response chunks.
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/SseChunk'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ─────────────────────────────────────────
+  # DOCUMENTS
+  # ─────────────────────────────────────────
+
+  /api/v1/documents:
+    post:
+      summary: Upload a document
+      description: |
+        Upload a document (PDF, DOCX, or TXT) for processing and RAG querying.
+
+        **Processing is asynchronous** — the response returns immediately with
+        status `UPLOADED`. Processing happens in the background:
+        1. Text extraction
+        2. Chunking into segments
+        3. Embedding generation (calls OpenAI embedding API)
+        4. Status → `READY`
+
+        **Poll `GET /api/v1/documents/{id}` to check status.**
+        Only query the document when status is `READY`.
+
+        **Important:** The document will be embedded using the provider
+        associated with `modelId`. When querying, use the same `modelId`
+        for best semantic similarity results.
+
+        **File limits:**
+        - Max size: 50MB
+        - Supported types: `.pdf`, `.docx`, `.txt`
+      operationId: uploadDocument
+      tags: [Documents]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The document file to upload.
+                modelId:
+                  type: string
+                  description: |
+                    Optional. The AI model to use for embedding this document.
+                    Defaults to the system default (`gpt-4o-mini`).
+                    Use the same model when querying for best results.
+                  example: gpt-4o-mini
+      responses:
+        '202':
+          description: |
+            Document accepted for processing.
+            202 Accepted (not 201 Created) because processing is async —
+            the resource exists but is not yet in its final state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentResponse'
+              example:
+                id: c3d4e5f6-a7b8-9012-cdef-012345678902
+                originalFilename: ai-overview.pdf
+                fileType: pdf
+                fileSizeBytes: 204800
+                status: UPLOADED
+                processedAt: null
+                createdAt: "2026-03-14T12:00:00Z"
+        '400':
+          description: Invalid file type or validation error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          description: File exceeds 50MB limit.
+
+    get:
+      summary: List documents
+      description: Returns paginated list of the authenticated user's uploaded documents.
+      operationId: listDocuments
+      tags: [Documents]
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Paginated list of documents.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMetadata'
+                  - type: object
+                    properties:
+                      content:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/DocumentResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/documents/{documentId}:
+    get:
+      summary: Get document status
+      description: |
+        Get details and processing status for a specific document.
+
+        **Poll this endpoint after uploading** until `status` becomes `READY` or `FAILED`.
+        Recommended polling interval: every 2-3 seconds.
+
+        Status lifecycle: `UPLOADED` → `PROCESSING` → `READY` or `FAILED`
+      operationId: getDocument
+      tags: [Documents]
+      parameters:
+        - $ref: '#/components/parameters/DocumentId'
+      responses:
+        '200':
+          description: Document details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      summary: Delete a document
+      description: Permanently deletes the document, its chunks, and its embeddings.
+      operationId: deleteDocument
+      tags: [Documents]
+      parameters:
+        - $ref: '#/components/parameters/DocumentId'
+      responses:
+        '204':
+          description: Deleted successfully.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ─────────────────────────────────────────
+  # RAG — DOCUMENT QUERYING
+  # ─────────────────────────────────────────
+
+  /api/v1/rag/documents/{documentId}/query:
+    post:
+      summary: Ask a question about a document
+      description: |
+        Ask a natural language question about an uploaded document using RAG
+        (Retrieval Augmented Generation).
+
+        **Document must have `status: READY`** before querying. If status is
+        still `PROCESSING`, this returns an error.
+
+        **How it works:**
+        1. Your question is converted to a vector embedding
+        2. The most semantically relevant document chunks are retrieved
+        3. Those chunks are sent to the AI model as context
+        4. The AI generates an answer based ONLY on the document content
+
+        **Important:** The answer is grounded in the document — the AI will
+        not use its general training knowledge to fill gaps. If the document
+        doesn't contain the answer, it will say so.
+
+        **`sources` in the response** contains the document excerpts used
+        to generate the answer — display these as citations in the UI.
+
+        **`similarity` scores** indicate how relevant each chunk was
+        (0.0 = unrelated, 1.0 = identical meaning). Scores above 0.4
+        indicate good semantic matches.
+      operationId: queryDocument
+      tags: [Documents]
+      parameters:
+        - $ref: '#/components/parameters/DocumentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentQueryRequest'
+            example:
+              question: What is Retrieval Augmented Generation and how does it work?
+              modelId: gpt-4o-mini
+      responses:
+        '200':
+          description: AI-generated answer with source citations.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentQueryResponse'
+              example:
+                answer: "Retrieval Augmented Generation (RAG) is a technique that enhances LLM responses..."
+                modelUsed: gpt-4o-mini
+                chunksUsed: 3
+                tokenUsage:
+                  promptTokens: 890
+                  completionTokens: 146
+                  totalTokens: 1036
+                sources:
+                  - chunkIndex: 1
+                    similarity: 0.46
+                    excerpt: "RAG is particularly useful for enterprise applications..."
+        '400':
+          description: Document is not ready for querying yet.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                status: 400
+                error: Bad Request
+                message: "Document is not ready for querying. Current status: PROCESSING"
+                code: VALIDATION_ERROR
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT access token obtained from `/api/v1/auth/login` or `/api/v1/auth/refresh`.
+        Prefix with "Bearer " — Spring Security handles this automatically.
+
+  schemas:
+
+    # ─────────────────────────────────────────
+    # AUTH SCHEMAS
+    # ─────────────────────────────────────────
+
+    RegisterRequest:
+      type: object
+      required: [email, password, fullName]
+      properties:
+        email:
+          type: string
+          format: email
+          example: user@example.com
+        password:
+          type: string
+          minLength: 8
+          maxLength: 100
+          example: securePassword123
+        fullName:
+          type: string
+          minLength: 2
+          maxLength: 100
+          example: John Doe
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: user@example.com
+        password:
+          type: string
+          example: securePassword123
+
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+          description: The refresh token received from login or a previous refresh call.
+          example: dGhpcyBpcyBhIHNhbXBsZSByZWZyZXNoIHRva2Vu
+
+    AuthResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+          description: |
+            JWT for authenticating API requests.
+            Add to every request as: `Authorization: Bearer {accessToken}`
+            Expires in 15 minutes (production) or 24 hours (dev).
+          example: eyJhbGciOiJIUzM4NCJ9.eyJlbWFpbCI6InRlc3QiLCJzdWIiOiJ...
+        refreshToken:
+          type: string
+          description: |
+            Opaque token for getting a new access token when it expires.
+            Store this securely (e.g., httpOnly cookie or secure storage).
+            Valid for 7 days. Rotated on every use — always store the latest value.
+          example: dGhpcyBpcyBhIHNhbXBsZSByZWZyZXNoIHRva2Vu
+        tokenType:
+          type: string
+          example: Bearer
+        expiresIn:
+          type: integer
+          description: Access token TTL in seconds.
+          example: 900
+        userId:
+          type: string
+          format: uuid
+          example: 7bce6bd2-9443-42be-815b-5339fd3297a5
+        email:
+          type: string
+          example: user@example.com
+        fullName:
+          type: string
+          example: John Doe
+
+    # ─────────────────────────────────────────
+    # MODEL SCHEMAS
+    # ─────────────────────────────────────────
+
+    ModelResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        modelKey:
+          type: string
+          description: |
+            The identifier to use when specifying a model in requests.
+            Use this value in `modelId` fields throughout the API.
+          example: gpt-4o-mini
+        displayName:
+          type: string
+          description: Human-readable name for UI dropdowns.
+          example: GPT-4o Mini
+        provider:
+          type: string
+          enum: [openai, anthropic, ollama, mock]
+          example: openai
+        contextWindow:
+          type: integer
+          description: Maximum tokens the model can process in a single request.
+          example: 128000
+        isDefault:
+          type: boolean
+          description: Whether this is the default model when none is specified.
+          example: true
+        available:
+          type: boolean
+          description: |
+            Whether this model is currently usable. False means the provider
+            API key is not configured. Show as disabled/greyed out in UI.
+          example: true
+        capabilities:
+          type: object
+          description: |
+            Provider-specific metadata including the associated embedding model.
+          example:
+            embeddingModel: text-embedding-3-small
+            embeddingDimensions: 1536
+
+    # ─────────────────────────────────────────
+    # CONVERSATION SCHEMAS
+    # ─────────────────────────────────────────
+
+    CreateConversationRequest:
+      type: object
+      required: [modelId]
+      properties:
+        modelId:
+          type: string
+          description: |
+            The model to use for this conversation. Use a `modelKey` value
+            from `GET /api/v1/models`. This becomes the default model for
+            all messages in this conversation.
+          example: gpt-4o-mini
+        title:
+          type: string
+          maxLength: 500
+          description: Optional conversation title. Defaults to "New Conversation".
+          example: My first chat
+        systemPrompt:
+          type: string
+          maxLength: 5000
+          description: |
+            Optional system prompt to set AI behavior for this conversation.
+            Example: "You are a helpful assistant that always responds in bullet points."
+          example: You are a helpful assistant.
+
+    ConversationResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+        title:
+          type: string
+          example: My first chat
+        modelId:
+          type: string
+          description: The model key this conversation uses by default.
+          example: gpt-4o-mini
+        systemPrompt:
+          type: string
+          nullable: true
+          example: You are a helpful assistant.
+        messageCount:
+          type: integer
+          example: 4
+        lastMessageAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2026-03-14T12:00:00Z"
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-03-14T11:00:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2026-03-14T12:00:00Z"
+
+    SendMessageRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          maxLength: 32000
+          description: The user's message text.
+          example: What is the capital of France?
+        modelId:
+          type: string
+          nullable: true
+          description: |
+            Optional model override for this single message only.
+            If not provided, uses the conversation's default model.
+            Use this to switch models mid-conversation.
+          example: gpt-4o-mini
+        stream:
+          type: boolean
+          default: true
+          description: |
+            Whether to stream the response. Defaults to true.
+            For the streaming endpoint this is ignored — use the
+            appropriate endpoint for streaming vs non-streaming.
+
+    MessageResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: b2c3d4e5-f6a7-8901-bcde-f12345678901
+        conversationId:
+          type: string
+          format: uuid
+          example: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+        role:
+          type: string
+          enum: [user, assistant, system]
+          description: Who sent this message.
+          example: assistant
+        content:
+          type: string
+          description: The message text.
+          example: The capital of France is Paris.
+        modelId:
+          type: string
+          nullable: true
+          description: Which model generated this message (only set for assistant messages).
+          example: gpt-4o-mini
+        promptTokens:
+          type: integer
+          nullable: true
+          description: Tokens used in the prompt (only for assistant messages).
+          example: 45
+        completionTokens:
+          type: integer
+          nullable: true
+          description: Tokens used in the completion (only for assistant messages).
+          example: 12
+        isError:
+          type: boolean
+          description: True if this message represents an error from the AI provider.
+          example: false
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-03-14T12:00:00Z"
+
+    SseChunk:
+      type: object
+      description: |
+        Server-Sent Event data format for streaming responses.
+
+        The SSE stream sends events in this format:
+        ```
+        event: chunk
+        data: {"content":"Hello"}
+
+        event: chunk
+        data: {"content":", how"}
+
+        event: chunk
+        data: {"content":" can I help?"}
+
+        event: done
+        data: {"content":"[DONE]","done":true}
+        ```
+
+        Parse each `data:` line as JSON. Stop consuming when `done: true`.
+      properties:
+        content:
+          type: string
+          description: The text chunk to append to the UI.
+          example: "Hello, how can I help you today?"
+        done:
+          type: boolean
+          description: True on the final event — stop listening when this is received.
+          example: false
+
+    # ─────────────────────────────────────────
+    # DOCUMENT SCHEMAS
+    # ─────────────────────────────────────────
+
+    DocumentResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: c3d4e5f6-a7b8-9012-cdef-012345678902
+        originalFilename:
+          type: string
+          example: ai-overview.pdf
+        fileType:
+          type: string
+          enum: [pdf, docx, txt]
+          example: pdf
+        fileSizeBytes:
+          type: integer
+          format: int64
+          example: 204800
+        status:
+          type: string
+          enum: [UPLOADED, PROCESSING, READY, FAILED]
+          description: |
+            Processing lifecycle:
+            - `UPLOADED` — file saved, processing not started yet
+            - `PROCESSING` — text extraction + chunking + embedding in progress
+            - `READY` — fully processed, can be queried via RAG
+            - `FAILED` — processing failed, see errorMessage for details
+          example: READY
+        pageCount:
+          type: integer
+          nullable: true
+          description: Number of pages (PDF only).
+          example: 12
+        errorMessage:
+          type: string
+          nullable: true
+          description: Set when status is FAILED. Describes what went wrong.
+          example: null
+        processedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When processing completed (READY or FAILED).
+          example: "2026-03-14T12:05:00Z"
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-03-14T12:00:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2026-03-14T12:05:00Z"
+
+    # ─────────────────────────────────────────
+    # RAG SCHEMAS
+    # ─────────────────────────────────────────
+
+    DocumentQueryRequest:
+      type: object
+      required: [question]
+      properties:
+        question:
+          type: string
+          maxLength: 2000
+          description: Natural language question about the document.
+          example: What is Retrieval Augmented Generation and how does it work?
+        modelId:
+          type: string
+          nullable: true
+          description: |
+            Optional model to use for generating the answer.
+            Defaults to the system default model (`gpt-4o-mini`).
+            Must match the model used when the document was uploaded
+            for best results (same embedding space).
+          example: gpt-4o-mini
+
+    DocumentQueryResponse:
+      type: object
+      properties:
+        answer:
+          type: string
+          description: AI-generated answer grounded in document content.
+          example: "Retrieval Augmented Generation (RAG) is a technique that enhances LLM responses..."
+        modelUsed:
+          type: string
+          description: Which model generated the answer.
+          example: gpt-4o-mini
+        chunksUsed:
+          type: integer
+          description: Number of document chunks retrieved and used as context.
+          example: 3
+        tokenUsage:
+          type: object
+          nullable: true
+          properties:
+            promptTokens:
+              type: integer
+              example: 890
+            completionTokens:
+              type: integer
+              example: 146
+            totalTokens:
+              type: integer
+              example: 1036
+        sources:
+          type: array
+          description: The document chunks that were used to generate the answer.
+          items:
+            type: object
+            properties:
+              chunkIndex:
+                type: integer
+                description: Position of this chunk in the document (0-based).
+                example: 1
+              similarity:
+                type: number
+                format: double
+                description: |
+                  Cosine similarity score (0.0 to 1.0).
+                  Higher = more relevant to the question.
+                  Typical range for good matches: 0.4 to 0.9.
+                example: 0.46
+              excerpt:
+                type: string
+                description: First 200 characters of the chunk for UI citation display.
+                example: "Retrieval Augmented Generation (RAG) is a technique that enhances..."
+
+    # ─────────────────────────────────────────
+    # PAGINATION SCHEMA
+    # ─────────────────────────────────────────
+
+    PageMetadata:
+      type: object
+      description: |
+        Pagination wrapper returned by list endpoints.
+        All list endpoints accept `page` (0-based) and `size` query parameters.
+      properties:
+        content:
+          type: array
+          items: {}
+          description: The items for the current page.
+        totalElements:
+          type: integer
+          example: 42
+        totalPages:
+          type: integer
+          example: 3
+        size:
+          type: integer
+          example: 20
+        number:
+          type: integer
+          description: Current page number (0-based).
+          example: 0
+
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          type: integer
+          example: 400
+        error:
+          type: string
+          example: Bad Request
+        message:
+          type: string
+          example: modelId is required
+        code:
+          type: string
+          example: VALIDATION_ERROR
+        path:
+          type: string
+          example: /api/v1/conversations
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-03-14T12:00:00Z"
+  parameters:
+    ConversationId:
+      name: conversationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      example: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+
+    DocumentId:
+      name: documentId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      example: c3d4e5f6-a7b8-9012-cdef-012345678902
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid access token.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: 401
+            error: Unauthorized
+            message: Full authentication is required to access this resource
+            code: UNAUTHORIZED
+
+    NotFound:
+      description: Resource not found or does not belong to the authenticated user.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: 404
+            error: Not Found
+            message: "Conversation not found: a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+            code: RESOURCE_NOT_FOUND
+
+    BadRequest:
+      description: Validation error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+# ─────────────────────────────────────────
+# TAGS (for UI grouping)
+# ─────────────────────────────────────────
+
+tags:
+  - name: Auth
+    description: |
+      Authentication — register, login, token refresh, logout.
+      All endpoints here are public (no token needed except logout).
+
+  - name: Models
+    description: |
+      Available AI models — used to populate model selectors in the UI.
+      Public endpoint, no authentication required.
+
+  - name: Chat
+    description: |
+      AI Chat feature — create conversations and send messages with streaming support.
+      All endpoints require authentication.
+
+  - name: Documents
+    description: |
+      Document Analyzer feature — upload files and query them with AI.
+      Includes both document management and RAG querying.
+      All endpoints require authentication.

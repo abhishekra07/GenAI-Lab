@@ -57,6 +57,18 @@ genailab:
   # ============================================================
   # JWT — dev-only secret, safe to commit
   # ============================================================
+
+  cors:
+    # Comma-separated list of allowed frontend origins.
+    # In production set this to your actual frontend domain.
+    # NEVER use * in production — it allows any website to call your API.
+    allowed-origins: http://localhost:8081
+    allowed-methods: GET,POST,PUT,PATCH,DELETE,OPTIONS
+    allowed-headers: "*"
+    allow-credentials: true
+    # How long the browser caches preflight OPTIONS responses (1 hour)
+    max-age: 3600
+
   security:
     jwt:
       secret: dev-secret-key-only-for-local-development-not-for-production

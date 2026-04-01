@@ -11,6 +11,7 @@ import com.genailab.chat.repository.MessageRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Flux;
@@ -23,8 +24,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Core chat service — orchestrates the full send-message flow.
- *
  * <p>Flow for a streaming message:
  * <ol>
  *   <li>Validate the conversation belongs to the user</li>
@@ -41,8 +40,6 @@ import java.util.concurrent.Executors;
 @Slf4j
 public class ChatService {
 
-    // Max messages to include in AI context to avoid hitting token limits.
-    // Includes the system prompt + last N messages. Tune based on model context window.
     private static final int MAX_CONTEXT_MESSAGES = 20;
 
     private final MessageRepository messageRepository;
@@ -50,20 +47,12 @@ public class ChatService {
     private final ConversationService conversationService;
     private final AiProviderRegistry aiProviderRegistry;
 
-    // Virtual thread executor for SSE streaming.
-    // WHY virtual threads? SSE requires a thread to stay alive for the duration
-    // of the stream. With traditional threads this would be expensive.
-    // Java 21 virtual threads are lightweight — thousands can run concurrently.
-    private final ExecutorService streamExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService streamExecutor =
+            Executors.newVirtualThreadPerTaskExecutor();
 
-    /**
-     * Load all messages for a conversation (for displaying chat history).
-     */
     @Transactional(readOnly = true)
     public List<MessageResponse> getMessages(UUID conversationId, UUID userId) {
-        // Verify ownership before returning messages
         conversationService.findOwnedConversation(conversationId, userId);
-
         return messageRepository
                 .findByConversationIdOrderByCreatedAtAsc(conversationId)
                 .stream()
@@ -71,47 +60,36 @@ public class ChatService {
                 .toList();
     }
 
-    /**
-     * Send a message and stream the AI response via SSE.
-     *
-     * <p>Returns an SseEmitter immediately. The actual streaming happens
-     * asynchronously on a virtual thread — the HTTP response stays open
-     * and chunks are pushed as they arrive from OpenAI.
-     *
-     * <p>SseEmitter has a timeout — we set it to 3 minutes which is more
-     * than enough for any AI response. The emitter is completed or errored
-     * inside the async task.
-     */
-    public SseEmitter streamMessage(UUID conversationId, SendMessageRequest request, UUID userId) {
+    public SseEmitter streamMessage(
+            UUID conversationId,
+            SendMessageRequest request,
+            UUID userId) {
 
         Conversation conversation = conversationService
                 .findOwnedConversation(conversationId, userId);
 
-        // Resolve which model to use — request can override conversation default
         String modelId = request.getModelId() != null
                 ? request.getModelId()
                 : conversation.getModelId();
 
-        // Save user message immediately — it's in the DB before AI call starts
-        Message userMessage = saveMessage(
-                conversationId, "user", request.getContent(), null, null, modelId, false);
+        // Save user message BEFORE handing off to virtual thread
+        // so it's committed and visible immediately
+        saveMessage(conversationId, "user", request.getContent(),
+                null, null, modelId, false);
 
-        // Create SSE emitter with 3-minute timeout
         SseEmitter emitter = new SseEmitter(180_000L);
 
-        // Run the streaming on a virtual thread so we don't block the HTTP thread
         streamExecutor.execute(() ->
-                executeStream(emitter, conversation, userMessage, modelId, request.getContent()));
+                executeStream(emitter, conversation, modelId, request.getContent()));
 
         return emitter;
     }
 
-    /**
-     * Send a message and return the full response (non-streaming).
-     * Used internally by the RAG pipeline and for simple integrations.
-     */
     @Transactional
-    public MessageResponse sendMessage(UUID conversationId, SendMessageRequest request, UUID userId) {
+    public MessageResponse sendMessage(
+            UUID conversationId,
+            SendMessageRequest request,
+            UUID userId) {
 
         Conversation conversation = conversationService
                 .findOwnedConversation(conversationId, userId);
@@ -130,46 +108,40 @@ public class ChatService {
                 .messages(contextMessages)
                 .build();
 
-        // Resolve provider from model registry — currently always "openai"
-        // When multiple providers exist, model configs table will drive this
         AiChatClient client = aiProviderRegistry.getChatClientForModel(modelId);
         AiChatResponse aiResponse = client.chat(aiRequest);
 
         Message assistantMessage = saveMessage(
-                conversationId,
-                "assistant",
+                conversationId, "assistant",
                 aiResponse.getContent(),
                 aiResponse.getTokenUsage() != null ? aiResponse.getTokenUsage().getPromptTokens() : null,
                 aiResponse.getTokenUsage() != null ? aiResponse.getTokenUsage().getCompletionTokens() : null,
-                modelId,
-                false);
+                modelId, false);
 
-        conversationRepository.updateLastMessageAt(conversationId, Instant.now());
+        updateLastMessageAt(conversationId);
 
         return toResponse(assistantMessage);
     }
 
     // =========================================================
-    // Private helpers
+    // Private — streaming
     // =========================================================
 
     /**
-     * Execute the streaming flow on a virtual thread.
+     * Executes the full streaming flow on a virtual thread.
      *
-     * <p>This method runs entirely off the HTTP thread. It:
-     * <ol>
-     *   <li>Builds context messages from conversation history</li>
-     *   <li>Calls the AI provider's stream endpoint</li>
-     *   <li>Sends each chunk to the SSE emitter</li>
-     *   <li>Accumulates the full response</li>
-     *   <li>Saves the complete assistant message to DB</li>
-     *   <li>Completes or errors the emitter</li>
-     * </ol>
+     * <p>IMPORTANT — never call emitter.completeWithError() here.
+     * Doing so triggers Tomcat's async error dispatcher which re-processes
+     * the request through Spring Security without a SecurityContext,
+     * resulting in "Access Denied" noise in logs and a broken SSE stream.
+     * Instead: send an error SSE event, then call emitter.complete().
+     *
+     * <p>All DB writes use REQUIRES_NEW propagation so they create
+     * their own transactions — this thread has no ambient transaction.
      */
     private void executeStream(
             SseEmitter emitter,
             Conversation conversation,
-            Message userMessage,
             String modelId,
             String userContent) {
 
@@ -187,44 +159,30 @@ public class ChatService {
             AiChatClient client = aiProviderRegistry.getChatClientForModel(modelId);
             Flux<AiStreamChunk> stream = client.streamChat(aiRequest);
 
-            // Subscribe to the Flux and block on this virtual thread.
-            // blockLast() subscribes and waits for the stream to complete.
-            // Each onNext sends the chunk to the SSE emitter.
             stream.doOnNext(chunk -> {
                 try {
                     if (!chunk.isDone() && chunk.getContent() != null
                             && !chunk.getContent().isEmpty()) {
                         fullResponse.append(chunk.getContent());
-                        // Send SSE event with the chunk text
                         emitter.send(SseEmitter.event()
                                 .name("chunk")
                                 .data(chunk.getContent()));
                     }
                     if (chunk.isDone()) {
-                        // Send a "done" event so the frontend knows the stream ended
                         emitter.send(SseEmitter.event()
                                 .name("done")
                                 .data("[DONE]"));
                     }
                 } catch (IOException e) {
-                    log.warn("Failed to send SSE chunk — client likely disconnected: {}",
-                            e.getMessage());
+                    log.warn("SSE client disconnected mid-stream: {}", e.getMessage());
                 }
             }).blockLast();
 
-            // Save the complete assembled response to DB
-            saveMessage(
-                    conversation.getId(),
-                    "assistant",
-                    fullResponse.toString(),
-                    null,   // prompt tokens not available in streaming mode
-                    null,   // completion tokens not available in streaming mode
-                    modelId,
-                    false);
+            // Save complete response in its own transaction
+            saveMessage(conversation.getId(), "assistant",
+                    fullResponse.toString(), null, null, modelId, false);
 
-            conversationRepository.updateLastMessageAt(conversation.getId(), Instant.now());
-
-            // Auto-generate a title from the first user message
+            updateLastMessageAt(conversation.getId());
             autoGenerateTitle(conversation, userContent);
 
             emitter.complete();
@@ -233,66 +191,38 @@ public class ChatService {
             log.error("Streaming failed for conversation {}: {}",
                     conversation.getId(), e.getMessage());
 
-            // Save error message to DB so the user can see what went wrong
+            // Save error message
             saveMessage(conversation.getId(), "assistant",
                     "Sorry, an error occurred: " + e.getMessage(),
                     null, null, modelId, true);
 
+            // Send error event to frontend
             try {
                 emitter.send(SseEmitter.event()
                         .name("error")
                         .data("Generation failed: " + e.getMessage()));
             } catch (IOException ignored) {}
 
-            emitter.completeWithError(e);
+            // IMPORTANT: complete() not completeWithError()
+            // completeWithError triggers Tomcat async error dispatch
+            // which re-runs security filters without SecurityContext → Access Denied
+            emitter.complete();
         }
     }
 
-    /**
-     * Build the message list to send to the AI.
-     *
-     * <p>Structure:
-     * <ol>
-     *   <li>System prompt (if the conversation has one)</li>
-     *   <li>Last N messages from conversation history</li>
-     *   <li>The new user message</li>
-     * </ol>
-     *
-     * <p>We cap history at MAX_CONTEXT_MESSAGES to avoid token limit issues
-     * on long conversations. The most recent messages are kept.
-     */
-    private List<AiMessage> buildContextMessages(Conversation conversation, String newUserContent) {
-        List<AiMessage> messages = new java.util.ArrayList<>();
-
-        // Add system prompt first if present
-        if (conversation.getSystemPrompt() != null
-                && !conversation.getSystemPrompt().isBlank()) {
-            messages.add(AiMessage.system(conversation.getSystemPrompt()));
-        }
-
-        // Load recent history — in reverse order from DB, then reverse back
-        List<Message> history = messageRepository.findRecentMessages(
-                conversation.getId(), MAX_CONTEXT_MESSAGES);
-
-        // findRecentMessages returns DESC order (newest first) — reverse to chronological
-        java.util.Collections.reverse(history);
-
-        history.forEach(msg ->
-                messages.add(new AiMessage(
-                        AiRole.valueOf(msg.getRole().toUpperCase()),
-                        msg.getContent())));
-
-        // Add the new user message at the end
-        messages.add(AiMessage.user(newUserContent));
-
-        return messages;
-    }
+    // =========================================================
+    // Private — DB helpers with explicit transaction management
+    // =========================================================
 
     /**
-     * Persist a message to the database.
+     * Save a message in its own transaction.
+     *
+     * <p>REQUIRES_NEW creates a new transaction regardless of context.
+     * This is critical for the async streaming path — the virtual thread
+     * has no ambient transaction, so REQUIRED would fail.
      */
-    @Transactional
-    protected Message saveMessage(
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Message saveMessage(
             UUID conversationId,
             String role,
             String content,
@@ -315,18 +245,53 @@ public class ChatService {
     }
 
     /**
-     * Auto-generate a conversation title from the first user message.
-     * Only runs when the conversation still has the default "New Conversation" title.
-     * Truncates to 60 characters for a clean sidebar display.
+     * Update last_message_at in its own transaction.
+     * Same reason as saveMessage — must be REQUIRES_NEW for async path.
      */
-    private void autoGenerateTitle(Conversation conversation, String firstMessage) {
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void updateLastMessageAt(UUID conversationId) {
+        conversationRepository.updateLastMessageAt(conversationId, Instant.now());
+    }
+
+    /**
+     * Auto-title in its own transaction.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void autoGenerateTitle(Conversation conversation, String firstMessage) {
         if ("New Conversation".equals(conversation.getTitle())) {
             String title = firstMessage.length() > 60
                     ? firstMessage.substring(0, 57) + "..."
                     : firstMessage;
-            conversation.setTitle(title);
-            conversationRepository.save(conversation);
+            conversationRepository.findById(conversation.getId()).ifPresent(c -> {
+                c.setTitle(title);
+                conversationRepository.save(c);
+            });
         }
+    }
+
+    // =========================================================
+    // Private — context builder
+    // =========================================================
+
+    private List<AiMessage> buildContextMessages(Conversation conversation, String newUserContent) {
+        List<AiMessage> messages = new java.util.ArrayList<>();
+
+        if (conversation.getSystemPrompt() != null
+                && !conversation.getSystemPrompt().isBlank()) {
+            messages.add(AiMessage.system(conversation.getSystemPrompt()));
+        }
+
+        List<Message> history = messageRepository.findRecentMessages(
+                conversation.getId(), MAX_CONTEXT_MESSAGES);
+        java.util.Collections.reverse(history);
+
+        history.forEach(msg ->
+                messages.add(new AiMessage(
+                        AiRole.valueOf(msg.getRole().toUpperCase()),
+                        msg.getContent())));
+
+        messages.add(AiMessage.user(newUserContent));
+        return messages;
     }
 
     private MessageResponse toResponse(Message m) {

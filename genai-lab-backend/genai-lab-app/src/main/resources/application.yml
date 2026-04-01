@@ -138,6 +138,15 @@ genailab:
   # ===============
   # SECURITY / JWT
   # ===============
+  cors:
+    # Comma-separated list of allowed frontend origins.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:8081}
+    allowed-methods: GET,POST,PUT,PATCH,DELETE,OPTIONS
+    allowed-headers: "*"
+    allow-credentials: true
+    # How long the browser caches preflight OPTIONS responses (1 hour)
+    max-age: 3600
+
   security:
     jwt:
       # Minimum 32 characters for HS256.

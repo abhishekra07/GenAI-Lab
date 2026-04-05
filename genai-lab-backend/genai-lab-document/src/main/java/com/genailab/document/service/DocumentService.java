@@ -166,6 +166,7 @@ public class DocumentService {
                 .status(d.getStatus())
                 .pageCount(d.getPageCount())
                 .errorMessage(d.getErrorMessage())
+                .fileUrl("/api/v1/documents/" + d.getId() + "/file")
                 .processedAt(d.getProcessedAt())
                 .createdAt(d.getCreatedAt())
                 .updatedAt(d.getUpdatedAt())

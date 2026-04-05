@@ -19,10 +19,11 @@ public class DocumentResponse {
     private UUID id;
     private String originalFilename;
     private String fileType;
-    private long fileSizeBytes;
+    private Long fileSizeBytes;
     private DocumentStatus status;
     private Integer pageCount;
     private String errorMessage;
+    private String fileUrl;
     private Instant processedAt;
     private Instant createdAt;
     private Instant updatedAt;
